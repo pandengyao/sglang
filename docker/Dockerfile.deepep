@@ -68,7 +68,7 @@ ENV GDRCOPY_HOME=/usr/src/gdrdrv-2.4.4/
 RUN  mkdir -p /tmp \
     &&  cd /tmp
     && git clone https://github.com/NVIDIA/gdrcopy.git  -b v2.4.4 \
-    && cd /tmp/gdrcopy/packages 、
+    && cd /tmp/gdrcopy/packages \
     && CUDA=/usr/local/cuda ./build-deb-packages.sh \
     && dpkg -i gdrdrv-dkms_*.deb \
     && dpkg -i libgdrapi_*.deb \
