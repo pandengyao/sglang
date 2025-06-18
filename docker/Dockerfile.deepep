@@ -111,5 +111,5 @@ ENV NVSHMEM_DIR=/sgl-workspace/nvshmem/install
 RUN NVSHMEM_DIR=/sgl-workspace/nvshmem/install pip install --break-system-packages .
 
 # Install mooncake transfer engine
-RUN pip install  --upgrade mooncake_transfer_engine
+RUN pip install  --upgrade mooncake_transfer_engine --break-system-packages
 
