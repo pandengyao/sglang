@@ -94,7 +94,7 @@ RUN tar -xf nvshmem_src_3.2.5-1.txz \
 
 # Compile NVSHMEM
 ENV CUDA_HOME=/usr/local/cuda
-RUN NVSHMEM_SHMEM_SUPPORT=0 \
+RUN cd /sgl-workspace/nvshmem && NVSHMEM_SHMEM_SUPPORT=0 \
     NVSHMEM_UCX_SUPPORT=0 \
     NVSHMEM_USE_NCCL=0 \
     NVSHMEM_MPI_SUPPORT=0 \
