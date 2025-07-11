@@ -328,9 +328,6 @@ jobs:
     if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') &&
         github.event.pull_request.draft == false
     runs-on: 8-gpu-runner
-    needs: [
-      unit-test-deepep-4-gpu,
-    ]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
