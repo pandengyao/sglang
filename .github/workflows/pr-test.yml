@@ -322,7 +322,7 @@ jobs:
         timeout-minutes: 20
         run: |
           cd test/srt
-          python3 run_suite.py --suite per-commit-4-gpu-deepep
+          NVSHMEM_DISABLE_CUDA_VMM=1 python3 run_suite.py --suite per-commit-4-gpu-deepep
 
   unit-test-deepep-8-gpu:
     if: (github.repository == 'sgl-project/sglang' || github.event_name == 'pull_request') &&
@@ -340,7 +340,7 @@ jobs:
         timeout-minutes: 20
         run: |
           cd test/srt
-          python3 run_suite.py --suite per-commit-8-gpu-deepep
+          NVSHMEM_DISABLE_CUDA_VMM=1 python3 run_suite.py --suite per-commit-8-gpu-deepep
 
   finish:
     if: always()
