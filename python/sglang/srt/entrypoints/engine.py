@@ -112,6 +112,7 @@ class Engine(EngineBase):
                 # Do not print logs by default
                 kwargs["log_level"] = "error"
             server_args = ServerArgs(**kwargs)
+        os.environ["export NVSHMEM_DISABLE_CUDA_VMM"] = "1"
 
         # Shutdown the subprocesses automatically when the program exits
         atexit.register(self.shutdown)
