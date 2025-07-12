@@ -270,6 +270,9 @@ class Scheduler(
             )
         )
 
+        prefix = self.get_print_prefix()
+        print(f"📊 [SCHEDULER{prefix}] Initializing scheduler...")
+
         # Init inter-process communication
         context = zmq.Context(2)
         self.idle_sleeper = None
@@ -314,6 +317,7 @@ class Scheduler(
             self.send_to_detokenizer = SimpleNamespace(send_pyobj=lambda x: None)
 
         # Init tokenizer
+        print(f"📊 [SCHEDULER{prefix}] Initializing tokenizer...")
         self.init_tokenizer()
 
         # Set reasoning_parser and think_end_id if --reasoning_parser is enabled
@@ -331,6 +335,7 @@ class Scheduler(
             logger.info("Overlap scheduler is disabled for embedding models.")
 
         # Launch a tensor parallel worker
+        print(f"📊 [SCHEDULER{prefix}] Creating tensor parallel worker...")
         if self.enable_overlap:
             TpWorkerClass = TpModelWorkerClient
         else:
@@ -361,6 +366,7 @@ class Scheduler(
             self.draft_worker = None
 
         # Get token and memory info from the model worker
+        print(f"📊 [SCHEDULER{prefix}] Getting worker info...")
         (
             self.max_total_num_tokens,
             self.max_prefill_tokens,
@@ -405,6 +411,7 @@ class Scheduler(
             )
 
         # Init memory pool and cache
+        print(f"📊 [SCHEDULER{prefix}] Initializing memory pool and cache...")
         self.init_memory_pool_and_cache()
 
         # Init running status
@@ -2726,6 +2733,9 @@ def run_scheduler_process(
     if server_args.pp_size > 1:
         prefix += f" PP{pp_rank}"
 
+    print(f"📊 [SCHEDULER{prefix}] Starting scheduler process...")
+    print(f"📊 [SCHEDULER{prefix}] GPU ID: {gpu_id}, Model: {server_args.model_path}, Quantization: {server_args.quantization}")
+
     # Config the process
     kill_itself_when_parent_died()
     setproctitle.setproctitle(f"sglang::scheduler{prefix.replace(' ', '_')}")
@@ -2750,7 +2760,9 @@ def run_scheduler_process(
     init_embedding_cache(embedding_cache_size * 1024 * 1024)
     # Create a scheduler and run the event loop
     try:
+        print(f"📊 [SCHEDULER{prefix}] Creating scheduler instance...")
         scheduler = Scheduler(server_args, port_args, gpu_id, tp_rank, pp_rank, dp_rank)
+        print(f"📊 [SCHEDULER{prefix}] Scheduler created successfully, sending ready signal...")
         pipe_writer.send(
             {
                 "status": "ready",
@@ -2758,6 +2770,7 @@ def run_scheduler_process(
                 "max_req_input_len": scheduler.max_req_input_len,
             }
         )
+        print(f"📊 [SCHEDULER{prefix}] Ready signal sent, starting event loop...")
         disaggregation_mode: DisaggregationMode = scheduler.disaggregation_mode
 
         if disaggregation_mode == DisaggregationMode.NULL:

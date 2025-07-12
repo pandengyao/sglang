@@ -353,6 +353,14 @@ class MoeWNA16Method:
         from sglang.srt.layers.moe.fused_moe_triton.fused_moe import fused_experts
         from sglang.srt.layers.moe.topk import select_experts
 
+        print(f"🔧 [WNA16_MOE] Starting WNA16 MoE inference")
+        print(f"🔧 [WNA16_MOE] Input shape: {x.shape}, dtype: {x.dtype}")
+        print(f"🔧 [WNA16_MOE] Router logits shape: {router_logits.shape}")
+        print(f"🔧 [WNA16_MOE] Top-k: {top_k}, activation: {activation}")
+        print(f"🔧 [WNA16_MOE] Weight bits: {self.quant_config.weight_bits}")
+        print(f"🔧 [WNA16_MOE] Has zero points: {self.quant_config.has_zp}")
+        print(f"🔧 [WNA16_MOE] Linear quant method: {self.quant_config.linear_quant_method}")
+
         assert activation == "silu", "Only SiLU activation is supported."
         topk_weights, topk_ids = select_experts(
             hidden_states=x,
@@ -368,10 +376,27 @@ class MoeWNA16Method:
             routed_scaling_factor=routed_scaling_factor,
         )
 
+        print(f"🔧 [WNA16_MOE] Expert selection completed")
+        print(f"🔧 [WNA16_MOE] Top-k weights shape: {topk_weights.shape}")
+        print(f"🔧 [WNA16_MOE] Top-k IDs shape: {topk_ids.shape}")
+        print(f"🔧 [WNA16_MOE] W13 qweight shape: {layer.w13_qweight.shape}")
+        print(f"🔧 [WNA16_MOE] W2 qweight shape: {layer.w2_qweight.shape}")
+        print(f"🔧 [WNA16_MOE] W13 scales shape: {layer.w13_scales.shape}")
+        print(f"🔧 [WNA16_MOE] W2 scales shape: {layer.w2_scales.shape}")
+        if self.quant_config.has_zp:
+            print(f"🔧 [WNA16_MOE] W13 qzeros shape: {layer.w13_qzeros.shape}")
+            print(f"🔧 [WNA16_MOE] W2 qzeros shape: {layer.w2_qzeros.shape}")
+
         weight_bits = self.quant_config.weight_bits
         has_zp = self.quant_config.has_zp
 
-        return fused_experts(
+        print(f"🔧 [WNA16_MOE] Calling fused_experts with dequantization parameters:")
+        print(f"🔧 [WNA16_MOE]   - use_int4_w4a16: {weight_bits == 4}")
+        print(f"🔧 [WNA16_MOE]   - use_int8_w8a16: {weight_bits == 8}")
+        print(f"🔧 [WNA16_MOE]   - block_shape: [0, {layer.group_size}]")
+        print(f"🔧 [WNA16_MOE]   - has_zp: {has_zp}")
+
+        result = fused_experts(
             x,
             layer.w13_qweight,
             layer.w2_qweight,
@@ -389,6 +414,9 @@ class MoeWNA16Method:
             no_combine=no_combine,
             routed_scaling_factor=routed_scaling_factor,
         )
+
+        print(f"🔧 [WNA16_MOE] Fused experts completed, output shape: {result.shape}")
+        return result
 
     @staticmethod
     def get_weight_loader(layer, weight_loader):
@@ -446,9 +474,15 @@ class MoeWNA16Method:
             shard_id: str,
             expert_id: int,
         ):
+            print(f"🔧 [WNA16_MOE_LOADER] Loading weight: {weight_name}")
+            print(f"🔧 [WNA16_MOE_LOADER] Shard ID: {shard_id}, Expert ID: {expert_id}")
+            print(f"🔧 [WNA16_MOE_LOADER] Loaded weight shape: {loaded_weight.shape}, dtype: {loaded_weight.dtype}")
+            
             if "g_idx" in weight_name:
+                print(f"🔧 [WNA16_MOE_LOADER] Skipping g_idx parameter")
                 return
             if not layer.quant_config.has_zp and "qzeros" in weight_name:
+                print(f"🔧 [WNA16_MOE_LOADER] Skipping qzeros parameter (no zero points)")
                 return
 
             device = get_tp_group().device
@@ -456,28 +490,43 @@ class MoeWNA16Method:
             loaded_weight = loaded_weight.to(device)
             shard_size = layer.intermediate_size_per_partition
 
+            print(f"🔧 [WNA16_MOE_LOADER] Converting weight for method: {layer.quant_config.linear_quant_method}")
+            print(f"🔧 [WNA16_MOE_LOADER] Weight bits: {layer.quant_config.weight_bits}")
+
             # convert gptq and awq weight to a standard format
             if layer.quant_config.linear_quant_method == "awq":
                 assert layer.quant_config.weight_bits == 4
+                print(f"🔧 [WNA16_MOE_LOADER] Converting AWQ tensor")
                 if "weight" in weight_name:
+                    print(f"🔧 [WNA16_MOE_LOADER] Converting AWQ qweight")
                     loaded_weight = convert_awq_tensor(loaded_weight, "qweight")
                 elif "zeros" in weight_name:
+                    print(f"🔧 [WNA16_MOE_LOADER] Converting AWQ qzeros")
                     loaded_weight = convert_awq_tensor(loaded_weight, "qzeros")
                 else:
+                    print(f"🔧 [WNA16_MOE_LOADER] Transposing non-weight/zeros tensor")
                     loaded_weight = loaded_weight.T
             elif layer.quant_config.linear_quant_method == "gptq":
                 assert layer.quant_config.weight_bits in [4, 8]
+                print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ tensor")
                 if "weight" in weight_name:
+                    print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ qweight")
                     loaded_weight = loaded_weight.T.contiguous().view(torch.uint8)
                 elif "zeros" in weight_name:
+                    print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ qzeros")
                     # add 1 to gptq qzeros to align with awq
                     loaded_weight = loaded_weight.view(torch.uint8)
                     if layer.quant_config.weight_bits == 4:
+                        print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ int4 qzeros")
                         loaded_weight = convert_gptq_int4_qzeros(loaded_weight).T
                     else:
+                        print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ int8 qzeros")
                         loaded_weight = loaded_weight.T + 1
                 else:
+                    print(f"🔧 [WNA16_MOE_LOADER] Transposing non-weight/zeros tensor")
                     loaded_weight = loaded_weight.T
+
+            print(f"🔧 [WNA16_MOE_LOADER] After conversion shape: {loaded_weight.shape}")
 
             # repeat the qzeros/scales to fit new group size
             if (
@@ -485,23 +534,33 @@ class MoeWNA16Method:
                 and "qzeros" in weight_name
                 or "scales" in weight_name
             ):
+                print(f"🔧 [WNA16_MOE_LOADER] Repeating tensor for group size adjustment")
+                print(f"🔧 [WNA16_MOE_LOADER] Group size div factor: {layer.group_size_div_factor}")
                 loaded_weight = loaded_weight.repeat_interleave(
                     layer.group_size_div_factor, 1
                 )
+                print(f"🔧 [WNA16_MOE_LOADER] After repeat shape: {loaded_weight.shape}")
 
             if "w13_qzeros" in weight_name:
+                print(f"🔧 [WNA16_MOE_LOADER] Processing w13_qzeros")
                 tensor = loaded_weight.view(layer.tp_size, -1, loaded_weight.size(1))[
                     tp_rank
                 ]
                 if shard_id == "w1":
+                    print(f"🔧 [WNA16_MOE_LOADER] Assigning to w1 part of w13")
                     param.data[expert_id, : shard_size // 2] = tensor
                 else:
+                    print(f"🔧 [WNA16_MOE_LOADER] Assigning to w3 part of w13")
                     param.data[expert_id, shard_size // 2 :] = tensor
             elif "w2_qzeros" in weight_name:
+                print(f"🔧 [WNA16_MOE_LOADER] Processing w2_qzeros")
                 param.data[expert_id] = loaded_weight.view(
                     loaded_weight.size(0), layer.tp_size, -1
                 )[:, tp_rank]
             else:
+                print(f"🔧 [WNA16_MOE_LOADER] Using default weight loader")
                 weight_loader(param, loaded_weight, weight_name, shard_id, expert_id)
+
+            print(f"🔧 [WNA16_MOE_LOADER] Weight loading completed for {weight_name}")
 
         return moe_wna16_weight_loader

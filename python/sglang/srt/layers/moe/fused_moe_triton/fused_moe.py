@@ -249,8 +249,14 @@ def fused_moe_kernel_gptq_awq(
             other=0.0,
         )
         b = tl.load(b_ptrs)
+        print(f"b_ptrs: {b_ptrs}, b: {b}, k_mask: {k_mask}, k_other: {k_other}")
+        
+        # 🔧 [TRITON_KERNEL] Dequantization step
         if use_int4_w4a16:
+            # Extract 4-bit values from packed 8-bit storage
             b = (b >> b_shifter) & 0xF
+            print(f"b after int4 extraction: {b}")
+        # Note: int8 values don't need bit extraction
 
         b_scale_ptrs = (
             b_scale_ptr
@@ -261,6 +267,7 @@ def fused_moe_kernel_gptq_awq(
         b_scale = tl.load(b_scale_ptrs, mask=k_mask, other=k_other)
         b_scale = b_scale.to(tl.float32)
 
+        # 🔧 [TRITON_KERNEL] Zero point handling for dequantization
         if has_zp and use_int4_w4a16:
             offs_k_true = (offs_k[:, None] + BLOCK_SIZE_K * k) // group_size
             b_zp_ptrs = (
@@ -285,8 +292,10 @@ def fused_moe_kernel_gptq_awq(
 
         # We accumulate along the K dimension.
         if has_zp:
+            # Dequantize: (quantized_value - zero_point) * scale
             b = ((b.to(tl.float32) - b_zp) * b_scale).to(compute_type)
         else:
+            # Dequantize: quantized_value * scale
             b = ((b.to(tl.float32) - b_zp_num) * b_scale).to(compute_type)
         accumulator = tl.dot(a, b, acc=accumulator)
 
@@ -1348,9 +1357,30 @@ def fused_experts(
     no_combine: bool = False,
     routed_scaling_factor: Optional[float] = None,
 ):
+    print(f"🔧 [FUSED_EXPERTS] Starting fused experts computation")
+    print(f"🔧 [FUSED_EXPERTS] Hidden states shape: {hidden_states.shape}")
+    print(f"🔧 [FUSED_EXPERTS] W1 shape: {w1.shape}, dtype: {w1.dtype}")
+    print(f"🔧 [FUSED_EXPERTS] W2 shape: {w2.shape}, dtype: {w2.dtype}")
+    print(f"🔧 [FUSED_EXPERTS] Top-k weights shape: {topk_weights.shape}")
+    print(f"🔧 [FUSED_EXPERTS] Top-k IDs shape: {topk_ids.shape}")
+    print(f"🔧 [FUSED_EXPERTS] Quantization flags:")
+    print(f"🔧 [FUSED_EXPERTS]   - use_int4_w4a16: {use_int4_w4a16}")
+    print(f"🔧 [FUSED_EXPERTS]   - use_int8_w8a16: {use_int8_w8a16}")
+    print(f"🔧 [FUSED_EXPERTS]   - use_fp8_w8a8: {use_fp8_w8a8}")
+    print(f"🔧 [FUSED_EXPERTS]   - use_int8_w8a8: {use_int8_w8a8}")
+    print(f"🔧 [FUSED_EXPERTS]   - per_channel_quant: {per_channel_quant}")
+    print(f"🔧 [FUSED_EXPERTS] Scale tensors:")
+    print(f"🔧 [FUSED_EXPERTS]   - W1 scale shape: {w1_scale.shape if w1_scale is not None else None}")
+    print(f"🔧 [FUSED_EXPERTS]   - W2 scale shape: {w2_scale.shape if w2_scale is not None else None}")
+    print(f"🔧 [FUSED_EXPERTS] Zero point tensors:")
+    print(f"🔧 [FUSED_EXPERTS]   - W1 zp shape: {w1_zp.shape if w1_zp is not None else None}")
+    print(f"🔧 [FUSED_EXPERTS]   - W2 zp shape: {w2_zp.shape if w2_zp is not None else None}")
+    print(f"🔧 [FUSED_EXPERTS] Block shape: {block_shape}")
+    print(f"🔧 [FUSED_EXPERTS] Inplace: {inplace}")
 
     if inplace:
         assert not no_combine, "no combine + inplace makes no sense"
+        print(f"🔧 [FUSED_EXPERTS] Using inplace fused experts")
         torch.ops.sglang.inplace_fused_experts(
             hidden_states,
             w1,
@@ -1373,9 +1403,11 @@ def fused_experts(
             block_shape,
             routed_scaling_factor,
         )
+        print(f"🔧 [FUSED_EXPERTS] Inplace fused experts completed")
         return hidden_states
     else:
-        return torch.ops.sglang.outplace_fused_experts(
+        print(f"🔧 [FUSED_EXPERTS] Using outplace fused experts")
+        result = torch.ops.sglang.outplace_fused_experts(
             hidden_states,
             w1,
             w2,
@@ -1398,6 +1430,8 @@ def fused_experts(
             no_combine=no_combine,
             routed_scaling_factor=routed_scaling_factor,
         )
+        print(f"🔧 [FUSED_EXPERTS] Outplace fused experts completed, result shape: {result.shape}")
+        return result
 
 
 # _moe_sum_reduce_kernel kernel modified from https://github.com/ModelTC/lightllm/blob/main/lightllm/common/fused_moe/moe_sum_reduce.py

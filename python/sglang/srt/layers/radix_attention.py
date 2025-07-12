@@ -88,16 +88,23 @@ class RadixAttention(nn.Module):
         save_kv_cache: bool = True,
         **kwargs,
     ):
+        print(f"🔧 [RADIX_ATTENTION] Starting core attention computation...")
+        print(f"🔧 [RADIX_ATTENTION] q shape: {q.shape}, k shape: {k.shape if k is not None else 'None'}, v shape: {v.shape if v is not None else 'None'}")
+        print(f"🔧 [RADIX_ATTENTION] q dtype: {q.dtype}, k dtype: {k.dtype if k is not None else 'None'}, v dtype: {v.dtype if v is not None else 'None'}")
+        
         if k is not None:
             # For cross-layer sharing, kv can be None
             assert v is not None
             if "k_rope" not in kwargs:
                 k = k.view(-1, self.tp_k_head_num, self.qk_head_dim)
                 v = v.view(-1, self.tp_v_head_num, self.v_head_dim)
+                print(f"🔧 [RADIX_ATTENTION] Reshaped k to: {k.shape}, v to: {v.shape}")
             else:
                 k = k.view(-1, self.tp_k_head_num, self.v_head_dim)
+                print(f"🔧 [RADIX_ATTENTION] Reshaped k (with rope) to: {k.shape}")
 
-        return forward_batch.attn_backend.forward(
+        print(f"🔧 [RADIX_ATTENTION] Calling attention backend: {type(forward_batch.attn_backend).__name__}")
+        result = forward_batch.attn_backend.forward(
             q,
             k,
             v,
@@ -106,3 +113,6 @@ class RadixAttention(nn.Module):
             save_kv_cache,
             **kwargs,
         )
+        print(f"🔧 [RADIX_ATTENTION] Backend output shape: {result.shape if hasattr(result, 'shape') else 'No shape'}")
+        print(f"🔧 [RADIX_ATTENTION] Core attention computation completed")
+        return result

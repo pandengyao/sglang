@@ -426,27 +426,35 @@ class DefaultModelLoader(BaseModelLoader):
         model_config: ModelConfig,
         device_config: DeviceConfig,
     ) -> nn.Module:
+        print(f"📦 [MODEL_LOADER] Starting model loading with format: {self.load_config.load_format}")
         target_device = torch.device(device_config.device)
         with set_default_torch_dtype(model_config.dtype):
             with target_device:
+                print(f"📦 [MODEL_LOADER] Initializing model architecture...")
                 model = _initialize_model(
                     model_config,
                     self.load_config,
                 )
+                print(f"📦 [MODEL_LOADER] Model architecture initialized: {type(model).__name__}")
 
+        print(f"📦 [MODEL_LOADER] Loading weights from {model_config.model_path}...")
         self.load_weights_and_postprocess(
             model, self._get_all_weights(model_config, model), target_device
         )
+        print(f"📦 [MODEL_LOADER] Weights loaded and post-processed successfully")
 
         return model.eval()
 
     @staticmethod
     def load_weights_and_postprocess(model, weights, target_device):
+        print(f"📦 [MODEL_LOADER] Loading weights into model...")
         model.load_weights(weights)
+        print(f"📦 [MODEL_LOADER] Weights loaded, starting post-processing...")
 
         for _, module in model.named_modules():
             quant_method = getattr(module, "quant_method", None)
             if quant_method is not None:
+                print(f"📦 [MODEL_LOADER] Processing quantization method for module: {type(module).__name__}")
                 # When quant methods need to process weights after loading
                 # (for repacking, quantizing, etc), they expect parameters
                 # to be on the global target device. This scope is for the
@@ -454,6 +462,7 @@ class DefaultModelLoader(BaseModelLoader):
                 # parameters onto device for processing and back off after.
                 with device_loading_context(module, target_device):
                     quant_method.process_weights_after_loading(module)
+        print(f"📦 [MODEL_LOADER] Post-processing completed")
 
 
 class LayeredModelLoader(DefaultModelLoader):
@@ -1518,26 +1527,39 @@ def load_model_with_cpu_quantization(
 
 def get_model_loader(load_config: LoadConfig) -> BaseModelLoader:
     """Get a model loader based on the load format."""
+    
+    print(f"🔍 [MODEL_LOADER] Starting model loader selection")
+    print(f"🔍 [MODEL_LOADER] Load format: {load_config.load_format}")
+    print(f"🔍 [MODEL_LOADER] Load format type: {type(load_config.load_format)}")
 
     if isinstance(load_config.load_format, type):
+        print(f"🔍 [MODEL_LOADER] Branch: Custom class loader (load_format is a type)")
+        print(f"🔍 [MODEL_LOADER] Creating custom loader: {load_config.load_format.__name__}")
         return load_config.load_format(load_config)
 
     if load_config.load_format == LoadFormat.DUMMY:
+        print(f"🔍 [MODEL_LOADER] Branch: DUMMY loader selected")
         return DummyModelLoader(load_config)
 
     if load_config.load_format == LoadFormat.SHARDED_STATE:
+        print(f"🔍 [MODEL_LOADER] Branch: SHARDED_STATE loader selected")
         return ShardedStateLoader(load_config)
 
     if load_config.load_format == LoadFormat.BITSANDBYTES:
+        print(f"🔍 [MODEL_LOADER] Branch: BITSANDBYTES loader selected")
         return BitsAndBytesModelLoader(load_config)
 
     if load_config.load_format == LoadFormat.GGUF:
+        print(f"🔍 [MODEL_LOADER] Branch: GGUF loader selected")
         return GGUFModelLoader(load_config)
 
     if load_config.load_format == LoadFormat.LAYERED:
+        print(f"🔍 [MODEL_LOADER] Branch: LAYERED loader selected")
         return LayeredModelLoader(load_config)
 
     if load_config.load_format == LoadFormat.REMOTE:
+        print(f"🔍 [MODEL_LOADER] Branch: REMOTE loader selected")
         return RemoteModelLoader(load_config)
 
+    print(f"🔍 [MODEL_LOADER] Branch: DEFAULT loader selected (fallback)")
     return DefaultModelLoader(load_config)

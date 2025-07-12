@@ -896,9 +896,11 @@ def launch_server(
     1. The HTTP server, Engine, and TokenizerManager both run in the main process.
     2. Inter-process communication is done through IPC (each process uses a different port) via the ZMQ library.
     """
+    print("🌐 [HTTP_SERVER] Launching SRT server...")
     tokenizer_manager, template_manager, scheduler_info = _launch_subprocesses(
         server_args=server_args
     )
+    print("🌐 [HTTP_SERVER] Subprocesses launched successfully")
     set_global_state(
         _GlobalState(
             tokenizer_manager=tokenizer_manager,
@@ -942,6 +944,7 @@ def launch_server(
         # Update logging configs
         set_uvicorn_logging_configs()
         app.server_args = server_args
+        print(f"🌐 [HTTP_SERVER] Starting uvicorn server on {server_args.host}:{server_args.port}")
         # Listen for HTTP requests
         uvicorn.run(
             app,
@@ -952,6 +955,7 @@ def launch_server(
             loop="uvloop",
         )
     finally:
+        print("🌐 [HTTP_SERVER] Server stopped, joining warmup thread...")
         warmup_thread.join()
 
 
