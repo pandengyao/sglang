@@ -1059,7 +1059,11 @@ class DeepseekV2AttentionMLA(nn.Module):
         forward_batch: ForwardBatch,
         zero_allocator: BumpAllocator,
     ):
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Starting attention forward pass...")
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+        tp_rank = get_tensor_model_parallel_rank()
+        
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Starting attention forward pass...")
         s = self.forward_prepare(
             positions=positions,
             hidden_states=hidden_states,
@@ -1067,7 +1071,8 @@ class DeepseekV2AttentionMLA(nn.Module):
             zero_allocator=zero_allocator,
         )
         result = self.forward_core(s)
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Attention forward pass completed")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Attention forward pass completed")
         return result
 
     def forward_prepare(
@@ -1077,9 +1082,13 @@ class DeepseekV2AttentionMLA(nn.Module):
         forward_batch: ForwardBatch,
         zero_allocator: BumpAllocator,
     ):
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Starting forward_prepare")
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Input hidden_states shape: {hidden_states.shape}")
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Positions shape: {positions.shape}")
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+        tp_rank = get_tensor_model_parallel_rank()
+        
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Starting forward_prepare")
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Input hidden_states shape: {hidden_states.shape}")
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Positions shape: {positions.shape}")
         
         if self.attn_mha.kv_b_proj is None:
             self.attn_mha.kv_b_proj = self.kv_b_proj
@@ -1088,41 +1097,49 @@ class DeepseekV2AttentionMLA(nn.Module):
             assert (
                 not self.o_proj.reduce_results
             ), "short-circuiting allreduce will lead to hangs"
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Empty hidden_states, short-circuiting")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Empty hidden_states, short-circuiting")
             return hidden_states, None, forward_batch, None
 
         attn_forward_method = self.dispatch_attn_forward_method(forward_batch)
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Selected attention method: {attn_forward_method}")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Selected attention method: {attn_forward_method}")
 
         if attn_forward_method == AttnForwardMethod.MHA:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using MHA forward method")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using MHA forward method")
             inner_state = self.forward_normal_prepare(
                 positions, hidden_states, forward_batch, zero_allocator
             )
         elif attn_forward_method == AttnForwardMethod.MHA_CHUNKED_KV:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using MHA_CHUNKED_KV forward method")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using MHA_CHUNKED_KV forward method")
             inner_state = self.forward_normal_chunked_kv_prepare(
                 positions, hidden_states, forward_batch, zero_allocator
             )
         elif attn_forward_method == AttnForwardMethod.MLA:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using MLA forward method")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using MLA forward method")
             inner_state = self.forward_absorb_prepare(
                 positions, hidden_states, forward_batch, zero_allocator
             )
         elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using MLA_FUSED_ROPE forward method")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using MLA_FUSED_ROPE forward method")
             inner_state = self.forward_absorb_fused_mla_rope_prepare(
                 positions, hidden_states, forward_batch, zero_allocator
             )
         elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE_CPU:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using MLA_FUSED_ROPE_CPU forward method")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using MLA_FUSED_ROPE_CPU forward method")
             inner_state = self.forward_absorb_fused_mla_rope_cpu_prepare(
                 positions, hidden_states, forward_batch, zero_allocator
             )
         else:
             raise NotImplementedError
         
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Forward_prepare completed")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Forward_prepare completed")
         return None, attn_forward_method, forward_batch, inner_state
 
     def forward_core(self, intermediate_state):
@@ -1202,33 +1219,44 @@ class DeepseekV2AttentionMLA(nn.Module):
         forward_batch: ForwardBatch,
         zero_allocator: BumpAllocator,
     ):
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Starting forward_absorb_prepare")
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Hidden_states shape: {hidden_states.shape}")
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+        tp_rank = get_tensor_model_parallel_rank()
+        
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Starting forward_absorb_prepare")
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Hidden_states shape: {hidden_states.shape}")
         
         from sglang.srt.model_executor.cuda_graph_runner import get_is_capture_mode
 
         if self.q_lora_rank is not None:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using LoRA projection, q_lora_rank={self.q_lora_rank}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using LoRA projection, q_lora_rank={self.q_lora_rank}")
             if hidden_states.shape[0] <= 16 and self.use_min_latency_fused_a_gemm:
-                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using min latency fused A GEMM")
+                if tp_rank == 0:
+                    print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using min latency fused A GEMM")
                 fused_qkv_a_proj_out = dsv3_fused_a_gemm(
                     hidden_states, self.fused_qkv_a_proj_with_mqa.weight.T
                 )
             else:
-                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using standard fused QKV projection")
+                if tp_rank == 0:
+                    print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using standard fused QKV projection")
                 fused_qkv_a_proj_out = self.fused_qkv_a_proj_with_mqa(hidden_states)[0]
             
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Fused QKV projection output shape: {fused_qkv_a_proj_out.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Fused QKV projection output shape: {fused_qkv_a_proj_out.shape}")
             q, latent_cache = fused_qkv_a_proj_out.split(
                 [self.q_lora_rank, self.kv_lora_rank + self.qk_rope_head_dim], dim=-1
             )
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Split q shape: {q.shape}, latent_cache shape: {latent_cache.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Split q shape: {q.shape}, latent_cache shape: {latent_cache.shape}")
             k_nope = latent_cache[..., : self.kv_lora_rank]
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] k_nope shape: {k_nope.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] k_nope shape: {k_nope.shape}")
 
             # overlap qk norm
             if self.alt_stream is not None and get_is_capture_mode():
-                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using alt stream for QK norm overlap")
+                if tp_rank == 0:
+                    print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using alt stream for QK norm overlap")
                 current_stream = torch.cuda.current_stream()
                 self.alt_stream.wait_stream(current_stream)
                 q = self.q_a_layernorm(q)
@@ -1236,35 +1264,50 @@ class DeepseekV2AttentionMLA(nn.Module):
                     k_nope = self.kv_a_layernorm(k_nope)
                 current_stream.wait_stream(self.alt_stream)
             else:
-                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using standard QK norm")
+                if tp_rank == 0:
+                    print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using standard QK norm")
                 q = self.q_a_layernorm(q)
                 k_nope = self.kv_a_layernorm(k_nope)
 
             k_nope = k_nope.unsqueeze(1)
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] k_nope after unsqueeze shape: {k_nope.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] k_nope after unsqueeze shape: {k_nope.shape}")
             q = self.q_b_proj(q)[0].view(-1, self.num_local_heads, self.qk_head_dim)
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] q after q_b_proj shape: {q.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] q after q_b_proj shape: {q.shape}")
         else:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using standard projection (no LoRA)")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using standard projection (no LoRA)")
             q = self.q_proj(hidden_states)[0].view(
                 -1, self.num_local_heads, self.qk_head_dim
             )
             latent_cache = self.kv_a_proj_with_mqa(hidden_states)[0]
             k_nope = latent_cache[..., : self.kv_lora_rank]
             k_nope = self.kv_a_layernorm(k_nope).unsqueeze(1)
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] q shape: {q.shape}, k_nope shape: {k_nope.shape}")
+            from sglang.srt.distributed import get_tensor_model_parallel_rank
+            tp_rank = get_tensor_model_parallel_rank()
+            
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] q shape: {q.shape}, k_nope shape: {k_nope.shape}")
 
         q_nope, q_pe = q.split([self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope shape: {q_nope.shape}, q_pe shape: {q_pe.shape}")
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+        tp_rank = get_tensor_model_parallel_rank()
+        
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope shape: {q_nope.shape}, q_pe shape: {q_pe.shape}")
         k_pe = latent_cache[..., self.kv_lora_rank :].unsqueeze(1)
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] k_pe shape: {k_pe.shape}")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] k_pe shape: {k_pe.shape}")
 
         if self.use_deep_gemm_bmm:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using DeepGEMM BMM for q_nope computation")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using DeepGEMM BMM for q_nope computation")
             q_nope_val, q_nope_scale, masked_m, expected_m, aligned_m = (
                 per_token_group_quant_mla_deep_gemm_masked_fp8(q_nope.transpose(0, 1))
             )
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope quantized - val shape: {q_nope_val.shape}, scale shape: {q_nope_scale.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope quantized - val shape: {q_nope_val.shape}, scale shape: {q_nope_scale.shape}")
             q_nope_out = q_nope.new_empty(
                 (self.num_local_heads, aligned_m, self.kv_lora_rank)
             )
@@ -1276,74 +1319,96 @@ class DeepseekV2AttentionMLA(nn.Module):
                 expected_m,
             )
             q_nope_out = q_nope_out[:, :expected_m, :]
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope_out after DeepGEMM shape: {q_nope_out.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope_out after DeepGEMM shape: {q_nope_out.shape}")
         elif _is_hip:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using HIP BMM for q_nope computation")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using HIP BMM for q_nope computation")
             # TODO(haishaw): add bmm_fp8 to ROCm
             q_nope_out = torch.bmm(
                 q_nope.to(torch.bfloat16).transpose(0, 1),
                 self.w_kc.to(torch.bfloat16) * self.w_scale,
             )
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope_out after HIP BMM shape: {q_nope_out.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope_out after HIP BMM shape: {q_nope_out.shape}")
         elif self.w_kc.dtype == torch.float8_e4m3fn:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using FP8 BMM for q_nope computation")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using FP8 BMM for q_nope computation")
             q_nope_val, q_nope_scale = per_tensor_quant_mla_fp8(
                 q_nope.transpose(0, 1),
                 zero_allocator.allocate(1),
             )
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope quantized to FP8 - val shape: {q_nope_val.shape}, scale shape: {q_nope_scale.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope quantized to FP8 - val shape: {q_nope_val.shape}, scale shape: {q_nope_scale.shape}")
             q_nope_out = bmm_fp8(
                 q_nope_val, self.w_kc, q_nope_scale, self.w_scale, torch.bfloat16
             )
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope_out after FP8 BMM shape: {q_nope_out.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope_out after FP8 BMM shape: {q_nope_out.shape}")
         else:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using standard BMM for q_nope computation")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using standard BMM for q_nope computation")
             q_nope_out = torch.bmm(q_nope.transpose(0, 1), self.w_kc)
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope_out after standard BMM shape: {q_nope_out.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope_out after standard BMM shape: {q_nope_out.shape}")
 
         q_nope_out = q_nope_out.transpose(0, 1)
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope_out after transpose shape: {q_nope_out.shape}")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope_out after transpose shape: {q_nope_out.shape}")
         q_pe, k_pe = self.rotary_emb(positions, q_pe, k_pe)
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Applied rotary embedding, q_pe shape: {q_pe.shape}, k_pe shape: {k_pe.shape}")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Applied rotary embedding, q_pe shape: {q_pe.shape}, k_pe shape: {k_pe.shape}")
 
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] forward_absorb_prepare completed")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] forward_absorb_prepare completed")
         return q_pe, k_pe, q_nope_out, k_nope, forward_batch, zero_allocator
 
     def forward_absorb_core(
         self, q_pe, k_pe, q_nope_out, k_nope, forward_batch, zero_allocator
     ):
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Starting forward_absorb_core")
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_pe shape: {q_pe.shape}, k_pe shape: {k_pe.shape}")
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope_out shape: {q_nope_out.shape}, k_nope shape: {k_nope.shape}")
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+        tp_rank = get_tensor_model_parallel_rank()
+        
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Starting forward_absorb_core")
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_pe shape: {q_pe.shape}, k_pe shape: {k_pe.shape}")
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] q_nope_out shape: {q_nope_out.shape}, k_nope shape: {k_nope.shape}")
         
         if (
             self.attention_backend == "fa3"
             or self.attention_backend == "flashinfer"
             or self.attention_backend == "cutlass_mla"
         ):
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using {self.attention_backend} attention backend")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using {self.attention_backend} attention backend")
             attn_output = self.attn_mqa(
                 q_nope_out, k_nope, k_nope, forward_batch, q_rope=q_pe, k_rope=k_pe
             )
         else:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using standard attention backend")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using standard attention backend")
             q = torch.cat([q_nope_out, q_pe], dim=-1)
             k = torch.cat([k_nope, k_pe], dim=-1)
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Concatenated q shape: {q.shape}, k shape: {k.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Concatenated q shape: {q.shape}, k shape: {k.shape}")
             attn_output = self.attn_mqa(q, k, k_nope, forward_batch)
         
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Attention output shape: {attn_output.shape}")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Attention output shape: {attn_output.shape}")
         attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Reshaped attention output shape: {attn_output.shape}")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Reshaped attention output shape: {attn_output.shape}")
 
         if self.use_deep_gemm_bmm:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using DeepGEMM BMM for output projection")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using DeepGEMM BMM for output projection")
             attn_output_val, attn_output_scale, masked_m, expected_m, aligned_m = (
                 per_token_group_quant_mla_deep_gemm_masked_fp8(
                     attn_output.transpose(0, 1)
                 )
             )
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] attn_output quantized - val shape: {attn_output_val.shape}, scale shape: {attn_output_scale.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] attn_output quantized - val shape: {attn_output_val.shape}, scale shape: {attn_output_scale.shape}")
             attn_bmm_output = attn_output.new_empty(
                 (self.num_local_heads, aligned_m, self.v_head_dim)
             )
@@ -1357,23 +1422,28 @@ class DeepseekV2AttentionMLA(nn.Module):
             attn_bmm_output = (
                 attn_bmm_output[:, :expected_m, :].transpose(0, 1).flatten(1, 2)
             )
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] attn_bmm_output after DeepGEMM shape: {attn_bmm_output.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] attn_bmm_output after DeepGEMM shape: {attn_bmm_output.shape}")
         elif _is_hip:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using HIP BMM for output projection")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using HIP BMM for output projection")
             # TODO(haishaw): add bmm_fp8 to ROCm
             attn_bmm_output = torch.bmm(
                 attn_output.to(torch.bfloat16).transpose(0, 1),
                 self.w_vc.to(torch.bfloat16) * self.w_scale,
             )
             attn_bmm_output = attn_bmm_output.transpose(0, 1).flatten(1, 2)
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] attn_bmm_output after HIP BMM shape: {attn_bmm_output.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] attn_bmm_output after HIP BMM shape: {attn_bmm_output.shape}")
         elif self.w_vc.dtype == torch.float8_e4m3fn:
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using FP8 BMM for output projection")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] Using FP8 BMM for output projection")
             attn_output_val, attn_output_scale = per_tensor_quant_mla_fp8(
                 attn_output.transpose(0, 1),
                 zero_allocator.allocate(1),
             )
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] attn_output quantized to FP8 - val shape: {attn_output_val.shape}, scale shape: {attn_output_scale.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] attn_output quantized to FP8 - val shape: {attn_output_val.shape}, scale shape: {attn_output_scale.shape}")
             attn_bmm_output = bmm_fp8(
                 attn_output_val,
                 self.w_vc,
@@ -1382,7 +1452,8 @@ class DeepseekV2AttentionMLA(nn.Module):
                 torch.bfloat16,
             )
             attn_bmm_output = attn_bmm_output.transpose(0, 1).flatten(1, 2)
-            print(f"🔧 [DEEPSEEK_V2_ATTENTION] attn_bmm_output after FP8 BMM shape: {attn_bmm_output.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_ATTENTION] attn_bmm_output after FP8 BMM shape: {attn_bmm_output.shape}")
         else:
             attn_bmm_output = torch.empty(
                 (attn_output.shape[0], self.num_local_heads * self.v_head_dim),
@@ -1397,8 +1468,9 @@ class DeepseekV2AttentionMLA(nn.Module):
                 ).transpose(0, 1),
             )
         output, _ = self.o_proj(attn_bmm_output)
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] Final output shape: {output.shape}")
-        print(f"🔧 [DEEPSEEK_V2_ATTENTION] forward_absorb_core completed")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] Final output shape: {output.shape}")
+            print(f"🔧 [DEEPSEEK_V2_ATTENTION] forward_absorb_core completed")
         return output
 
     def forward_absorb_fused_mla_rope_prepare(
@@ -1929,27 +2001,35 @@ class DeepseekV2DecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
         zero_allocator: BumpAllocator,
     ) -> torch.Tensor:
-        print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Starting layer forward pass")
-        print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Input hidden_states shape: {hidden_states.shape}")
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+        tp_rank = get_tensor_model_parallel_rank()
+        
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Starting layer forward pass")
+            print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Input hidden_states shape: {hidden_states.shape}")
 
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )
-        print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Prepared for attention, hidden_states shape: {hidden_states.shape}")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Prepared for attention, hidden_states shape: {hidden_states.shape}")
 
-        print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Starting self-attention")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Starting self-attention")
         hidden_states = self.self_attn(
             positions=positions,
             hidden_states=hidden_states,
             forward_batch=forward_batch,
             zero_allocator=zero_allocator,
         )
-        print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Self-attention completed, output shape: {hidden_states.shape}")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Self-attention completed, output shape: {hidden_states.shape}")
 
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states, residual, forward_batch
         )
-        print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Prepared for MLP, hidden_states shape: {hidden_states.shape}")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Prepared for MLP, hidden_states shape: {hidden_states.shape}")
 
         can_fuse_mlp_allreduce = (
             self._should_fuse_mlp_allreduce_with_next_layer(forward_batch)
@@ -1957,11 +2037,14 @@ class DeepseekV2DecoderLayer(nn.Module):
             and not self.is_nextn
         )
         if can_fuse_mlp_allreduce:
-            print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Using fused MLP allreduce")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Using fused MLP allreduce")
 
-        print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Starting MLP")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Starting MLP")
         hidden_states = self.mlp(hidden_states, forward_batch, can_fuse_mlp_allreduce)
-        print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] MLP completed, output shape: {hidden_states.shape}")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] MLP completed, output shape: {hidden_states.shape}")
 
         if can_fuse_mlp_allreduce:
             hidden_states._sglang_needs_allreduce_fusion = True
@@ -1970,9 +2053,11 @@ class DeepseekV2DecoderLayer(nn.Module):
             hidden_states, residual = self.layer_communicator.postprocess_layer(
                 hidden_states, residual, forward_batch
             )
-            print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Post-processed layer, output shape: {hidden_states.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Post-processed layer, output shape: {hidden_states.shape}")
 
-        print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Layer forward pass completed")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_LAYER_{self.layer_id}] Layer forward pass completed")
         return hidden_states, residual
 
     def op_comm_prepare_attn(
@@ -2090,13 +2175,18 @@ class DeepseekV2Model(nn.Module):
         forward_batch: ForwardBatch,
         input_embeds: torch.Tensor = None,
     ) -> torch.Tensor:
-        print(f"🔧 [DEEPSEEK_V2_MODEL] Starting model forward pass...")
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+        tp_rank = get_tensor_model_parallel_rank()
+        
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_MODEL] Starting model forward pass...")
         total_num_layers = len(self.layers)
         device = input_embeds.device if input_embeds is not None else input_ids.device
-        print(f"🔧 [DEEPSEEK_V2_MODEL] Total layers: {total_num_layers}, Device: {device}")
-        print(f"🔧 [DEEPSEEK_V2_MODEL] Input IDs shape: {input_ids.shape if input_ids is not None else 'None'}")
-        print(f"🔧 [DEEPSEEK_V2_MODEL] Positions shape: {positions.shape}")
-        print(f"🔧 [DEEPSEEK_V2_MODEL] Input embeds shape: {input_embeds.shape if input_embeds is not None else 'None'}")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_MODEL] Total layers: {total_num_layers}, Device: {device}")
+            print(f"🔧 [DEEPSEEK_V2_MODEL] Input IDs shape: {input_ids.shape if input_ids is not None else 'None'}")
+            print(f"🔧 [DEEPSEEK_V2_MODEL] Positions shape: {positions.shape}")
+            print(f"🔧 [DEEPSEEK_V2_MODEL] Input embeds shape: {input_embeds.shape if input_embeds is not None else 'None'}")
         
         zero_allocator = BumpAllocator(
             buffer_size=total_num_layers * 2 * (2 if forward_batch.can_run_tbo else 1),
@@ -2109,7 +2199,8 @@ class DeepseekV2Model(nn.Module):
         else:
             hidden_states = input_embeds
 
-        print(f"🔧 [DEEPSEEK_V2_MODEL] Embedding completed, shape: {hidden_states.shape}")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_MODEL] Embedding completed, shape: {hidden_states.shape}")
 
         residual = None
 
@@ -2118,19 +2209,23 @@ class DeepseekV2Model(nn.Module):
             if forward_batch.can_run_tbo
             else total_num_layers
         )
-        print(f"🔧 [DEEPSEEK_V2_MODEL] Processing {normal_num_layers} normal layers")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_MODEL] Processing {normal_num_layers} normal layers")
         
         for i in range(normal_num_layers):
-            print(f"🔧 [DEEPSEEK_V2_MODEL] Processing layer {i}/{normal_num_layers}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_MODEL] Processing layer {i}/{normal_num_layers}")
             with get_global_expert_distribution_recorder().with_current_layer(i):
                 layer = self.layers[i]
                 hidden_states, residual = layer(
                     positions, hidden_states, forward_batch, residual, zero_allocator
                 )
-                print(f"🔧 [DEEPSEEK_V2_MODEL] Layer {i} completed, hidden_states shape: {hidden_states.shape}")
+                if tp_rank == 0:
+                    print(f"🔧 [DEEPSEEK_V2_MODEL] Layer {i} completed, hidden_states shape: {hidden_states.shape}")
 
         if normal_num_layers != total_num_layers:
-            print(f"🔧 [DEEPSEEK_V2_MODEL] Processing {total_num_layers - normal_num_layers} TBO layers")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_MODEL] Processing {total_num_layers - normal_num_layers} TBO layers")
             hidden_states, residual = model_forward_maybe_tbo(
                 layers=self.layers[normal_num_layers:],
                 enable_tbo=True,
@@ -2143,16 +2238,20 @@ class DeepseekV2Model(nn.Module):
                 ].layer_scatter_modes.layer_output_mode,
                 zero_allocator=zero_allocator,
             )
-            print(f"🔧 [DEEPSEEK_V2_MODEL] TBO layers completed, hidden_states shape: {hidden_states.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2_MODEL] TBO layers completed, hidden_states shape: {hidden_states.shape}")
 
         if not forward_batch.forward_mode.is_idle():
             if residual is None:
                 hidden_states = self.norm(hidden_states)
-                print(f"🔧 [DEEPSEEK_V2_MODEL] Applied final norm (no residual), output shape: {hidden_states.shape}")
+                if tp_rank == 0:
+                    print(f"🔧 [DEEPSEEK_V2_MODEL] Applied final norm (no residual), output shape: {hidden_states.shape}")
             else:
                 hidden_states, _ = self.norm(hidden_states, residual)
-                print(f"🔧 [DEEPSEEK_V2_MODEL] Applied final norm (with residual), output shape: {hidden_states.shape}")
-        print(f"🔧 [DEEPSEEK_V2_MODEL] Model forward pass completed")
+                if tp_rank == 0:
+                    print(f"🔧 [DEEPSEEK_V2_MODEL] Applied final norm (with residual), output shape: {hidden_states.shape}")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2_MODEL] Model forward pass completed")
         return hidden_states
 
 
@@ -2244,7 +2343,11 @@ class DeepseekV2ForCausalLM(nn.Module):
         )
 
     def post_load_weights(self, is_nextn=False, weight_names=None):
-        print(f"🔧 [DEEPSEEK_V2] Starting post-load weights processing...")
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+        tp_rank = get_tensor_model_parallel_rank()
+        
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2] Starting post-load weights processing...")
 
         # Perform post-processing after loading weights
         if is_nextn:
@@ -2260,7 +2363,8 @@ class DeepseekV2ForCausalLM(nn.Module):
                         if layer_id < self.config.num_hidden_layers:
                             layer_ids.add(layer_id)
         
-        print(f"🔧 [DEEPSEEK_V2] Processing {len(layer_ids)} layers for post-load weights")
+        if tp_rank == 0:
+            print(f"🔧 [DEEPSEEK_V2] Processing {len(layer_ids)} layers for post-load weights")
 
         for layer_id in layer_ids:
             self_attn = (
@@ -2269,10 +2373,11 @@ class DeepseekV2ForCausalLM(nn.Module):
                 else self.model.decoder.self_attn
             )
             if hasattr(self_attn.kv_b_proj, "qweight"):
-                print(f"🔧 [DEEPSEEK_V2] Processing AWQ dequantization for layer {layer_id}")
-                print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - qweight shape: {self_attn.kv_b_proj.qweight.shape}")
-                print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - scales shape: {self_attn.kv_b_proj.scales.shape}")
-                print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - qzeros shape: {self_attn.kv_b_proj.qzeros.shape}")
+                if tp_rank == 0:
+                    print(f"🔧 [DEEPSEEK_V2] Processing AWQ dequantization for layer {layer_id}")
+                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - qweight shape: {self_attn.kv_b_proj.qweight.shape}")
+                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - scales shape: {self_attn.kv_b_proj.scales.shape}")
+                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - qzeros shape: {self_attn.kv_b_proj.qzeros.shape}")
                 
                 # AWQ compatible
                 if _is_cuda:
@@ -2290,10 +2395,12 @@ class DeepseekV2ForCausalLM(nn.Module):
                         0,
                         0,
                     ).T
-                print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - AWQ dequantized weight shape: {w.shape}")
+                if tp_rank == 0:
+                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - AWQ dequantized weight shape: {w.shape}")
             else:
                 w = self_attn.kv_b_proj.weight
-                print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Using non-quantized weight, shape: {w.shape}")
+                if tp_rank == 0:
+                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Using non-quantized weight, shape: {w.shape}")
             
             # NOTE(HandH1998): Since `bmm_fp8` only supports per-tensor scale, we have to requantize `self_attn.kv_b_proj`.
             # This may affect the accuracy of fp8 model.
@@ -2304,13 +2411,15 @@ class DeepseekV2ForCausalLM(nn.Module):
                 torch.float8_e4m3fn,
                 torch.float8_e4m3fnuz,
             ):
-                print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Processing FP8 quantization")
+                if tp_rank == 0:
+                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Processing FP8 quantization")
                 if (
                     hasattr(self.quant_config, "weight_block_size")
                     and self.quant_config.weight_block_size is not None
                 ):
                     weight_block_size = self.quant_config.weight_block_size
-                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Using block-wise quantization, block_size={weight_block_size}")
+                    if tp_rank == 0:
+                        print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Using block-wise quantization, block_size={weight_block_size}")
                     assert hasattr(self_attn.kv_b_proj, "weight_scale_inv")
                     if _is_fp8_fnuz:
                         weight, weight_scale, _ = normalize_e4m3fn_to_e4m3fnuz(
@@ -2318,7 +2427,8 @@ class DeepseekV2ForCausalLM(nn.Module):
                             weight_scale=self_attn.kv_b_proj.weight_scale_inv,
                             input_scale=None,
                         )
-                        print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Normalized to FP8_FNUZ, weight shape: {weight.shape}")
+                        if tp_rank == 0:
+                            print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Normalized to FP8_FNUZ, weight shape: {weight.shape}")
                     else:
                         weight = w
                         weight_scale = self_attn.kv_b_proj.weight_scale_inv
@@ -2335,7 +2445,8 @@ class DeepseekV2ForCausalLM(nn.Module):
                         ):
                             block_scale = weight_scale
                             use_deep_gemm_bmm = True
-                            print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Using DeepGEMM BMM optimization")
+                            if tp_rank == 0:
+                                print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Using DeepGEMM BMM optimization")
                         else:
                             w = block_quant_dequant(
                                 weight,
@@ -2343,15 +2454,18 @@ class DeepseekV2ForCausalLM(nn.Module):
                                 weight_block_size,
                                 torch.bfloat16,
                             )
-                            print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Block quant-dequant applied, output shape: {w.shape}")
+                            if tp_rank == 0:
+                                print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Block quant-dequant applied, output shape: {w.shape}")
                     else:
                         w, scale = block_quant_to_tensor_quant(
                             weight, weight_scale, weight_block_size
                         )
                         self_attn.w_scale = scale
-                        print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Block to tensor quant, output shape: {w.shape}")
+                        if tp_rank == 0:
+                            print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Block to tensor quant, output shape: {w.shape}")
                 else:
-                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Using channel-wise quantization")
+                    if tp_rank == 0:
+                        print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Using channel-wise quantization")
                     if _is_fp8_fnuz:
                         weight, weight_scale, _ = normalize_e4m3fn_to_e4m3fnuz(
                             weight=w,
@@ -2364,35 +2478,43 @@ class DeepseekV2ForCausalLM(nn.Module):
 
                     w, scale = channel_quant_to_tensor_quant(weight, weight_scale)
                     self_attn.w_scale = scale
-                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Channel to tensor quant, output shape: {w.shape}")
+                    if tp_rank == 0:
+                        print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Channel to tensor quant, output shape: {w.shape}")
 
             if w.dtype == torch.int8:
-                print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Processing INT8 quantization")
+                if tp_rank == 0:
+                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Processing INT8 quantization")
                 if hasattr(self.quant_config, "weight_block_size"):
                     # block-wise int8 need it
                     weight_block_size = self.quant_config.weight_block_size
                     if weight_block_size is not None:
-                        print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Using block-wise INT8 dequantization")
+                        if tp_rank == 0:
+                            print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Using block-wise INT8 dequantization")
                         assert hasattr(self_attn.kv_b_proj, "weight_scale_inv")
                         weight = w
                         weight_scale = self_attn.kv_b_proj.weight_scale_inv
                         w = int8_block_dequant(
                             weight, weight_scale, weight_block_size
                         ).to(torch.bfloat16)
-                        print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - INT8 block dequantized, output shape: {w.shape}")
+                        if tp_rank == 0:
+                            print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - INT8 block dequantized, output shape: {w.shape}")
                 else:
                     # channel-wise int8 need it
-                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Using channel-wise INT8 dequantization")
+                    if tp_rank == 0:
+                        print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Using channel-wise INT8 dequantization")
                     w = w.to(torch.bfloat16) * self_attn.kv_b_proj.weight_scale.to(
                         torch.bfloat16
                     )
-                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - INT8 channel dequantized, output shape: {w.shape}")
+                    if tp_rank == 0:
+                        print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - INT8 channel dequantized, output shape: {w.shape}")
 
-            print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Splitting weight into K and V components")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Splitting weight into K and V components")
             w_kc, w_vc = w.unflatten(
                 0, (-1, self_attn.qk_nope_head_dim + self_attn.v_head_dim)
             ).split([self_attn.qk_nope_head_dim, self_attn.v_head_dim], dim=1)
-            print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - w_kc shape: {w_kc.shape}, w_vc shape: {w_vc.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - w_kc shape: {w_kc.shape}, w_vc shape: {w_vc.shape}")
             
             if not use_deep_gemm_bmm:
                 self_attn.w_kc = bind_or_assign(
@@ -2401,7 +2523,8 @@ class DeepseekV2ForCausalLM(nn.Module):
                 self_attn.w_vc = bind_or_assign(
                     self_attn.w_vc, w_vc.contiguous().transpose(1, 2)
                 )
-                print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Assigned w_kc and w_vc with standard layout")
+                if tp_rank == 0:
+                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Assigned w_kc and w_vc with standard layout")
                 if (
                     hasattr(self_attn.kv_b_proj, "weight_scale")
                     and self_attn.w_scale is None
@@ -2411,7 +2534,8 @@ class DeepseekV2ForCausalLM(nn.Module):
                     )
                     if _is_hip:
                         self_attn.w_scale *= 2.0
-                    print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Assigned weight scale")
+                    if tp_rank == 0:
+                        print(f"🔧 [DEEPSEEK_V2] Layer {layer_id} - Assigned weight scale")
                 # TODO: remove this after adding FP8 support in bmm cpu kernel
                 if _is_cpu and _is_cpu_amx_available and w.dtype == torch.float8_e4m3fn:
                     self_attn.w_kc = (

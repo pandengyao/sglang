@@ -171,6 +171,8 @@ def _initialize_model(
     quant_config = _get_quantization_config(
         model_config, load_config, packed_modules_mapping
     )
+    print(f"📦 [MODEL_LOADER] model_config: {model_config}")
+    print(f"📦 [MODEL_LOADER] quant_config: {quant_config}")
     return model_class(
         config=model_config.hf_config,
         quant_config=quant_config,
@@ -357,6 +359,7 @@ class DefaultModelLoader(BaseModelLoader):
         hf_folder, hf_weights_files, use_safetensors = self._prepare_weights(
             source.model_or_path, source.revision, source.fall_back_to_pt
         )
+        print(f"📦 [MODEL_LOADER] Weights files found: {hf_weights_files}")
         if self.load_config.load_format == LoadFormat.NPCACHE:
             # Currently np_cache only support *.bin checkpoints
             assert use_safetensors is False
@@ -367,6 +370,7 @@ class DefaultModelLoader(BaseModelLoader):
                 hf_weights_files,
             )
         elif use_safetensors:
+            print(f"📦 [MODEL_LOADER] Using safetensors loading")
             from sglang.srt.managers.schedule_batch import global_server_args_dict
 
             weight_loader_disable_mmap = global_server_args_dict.get(
@@ -374,6 +378,7 @@ class DefaultModelLoader(BaseModelLoader):
             )
 
             if extra_config.get("enable_multithread_load"):
+                print(f"📦 [MODEL_LOADER] Using multi-threaded safetensors loading with {extra_config.get('num_threads', self.DEFAULT_NUM_THREADS)} threads")
                 weights_iterator = multi_thread_safetensors_weights_iterator(
                     hf_weights_files,
                     max_workers=extra_config.get(
@@ -382,6 +387,7 @@ class DefaultModelLoader(BaseModelLoader):
                     disable_mmap=weight_loader_disable_mmap,
                 )
             else:
+                print(f"📦 [MODEL_LOADER] Using single-threaded safetensors loading")
                 weights_iterator = safetensors_weights_iterator(
                     hf_weights_files, disable_mmap=weight_loader_disable_mmap
                 )
@@ -412,6 +418,7 @@ class DefaultModelLoader(BaseModelLoader):
         secondary_weights = cast(
             Iterable[DefaultModelLoader.Source], getattr(model, "secondary_weights", ())
         )
+        print(f"📦 [MODEL_LOADER] Secondary weights: {secondary_weights}")
         for source in secondary_weights:
             yield from self._get_weights_iterator(source)
 
@@ -436,6 +443,7 @@ class DefaultModelLoader(BaseModelLoader):
                     self.load_config,
                 )
                 print(f"📦 [MODEL_LOADER] Model architecture initialized: {type(model).__name__}")
+                print(f"📦 [MODEL_LOADER] Model:\n {model}")
 
         print(f"📦 [MODEL_LOADER] Loading weights from {model_config.model_path}...")
         self.load_weights_and_postprocess(
@@ -455,6 +463,9 @@ class DefaultModelLoader(BaseModelLoader):
             quant_method = getattr(module, "quant_method", None)
             if quant_method is not None:
                 print(f"📦 [MODEL_LOADER] Processing quantization method for module: {type(module).__name__}")
+                print(f"📦 [MODEL_LOADER] Quant method type: {type(quant_method).__name__}")
+                print(f"📦 [MODEL_LOADER] Quant method class: {quant_method.__class__.__module__}.{quant_method.__class__.__name__}")
+                print(f"📦 [MODEL_LOADER] Quant method object: {quant_method}")
                 # When quant methods need to process weights after loading
                 # (for repacking, quantizing, etc), they expect parameters
                 # to be on the global target device. This scope is for the
