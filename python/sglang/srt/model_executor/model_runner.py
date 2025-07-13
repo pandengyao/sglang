@@ -172,10 +172,8 @@ class ModelRunner:
 
         prefix = f" TP{tp_rank}" if tp_size > 1 else ""
         prefix += f" PP{pp_rank}" if pp_size > 1 else ""
-        from sglang.srt.distributed import get_tensor_model_parallel_rank
-        current_tp_rank = get_tensor_model_parallel_rank()
         
-        if current_tp_rank == 0:
+        if tp_rank == 0:
             print(f"🤖 [MODEL_RUNNER{prefix}] Initializing model runner...")
             print(f"🤖 [MODEL_RUNNER{prefix}] Device: {self.device}, GPU ID: {gpu_id}")
 
