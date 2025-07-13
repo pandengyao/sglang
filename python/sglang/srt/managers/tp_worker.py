@@ -69,15 +69,13 @@ class TpModelWorker:
 
         prefix = f" TP{tp_rank}" if server_args.tp_size > 1 else ""
         prefix += f" PP{pp_rank}" if server_args.pp_size > 1 else ""
-        from sglang.srt.distributed import get_tensor_model_parallel_rank
-        current_tp_rank = get_tensor_model_parallel_rank()
         
-        if current_tp_rank == 0:
+        if tp_rank == 0:
             print(f"🔧 [TP_WORKER{prefix}] Initializing tensor parallel worker...")
             print(f"🔧 [TP_WORKER{prefix}] GPU ID: {gpu_id}, Model: {server_args.model_path}")
 
         # Init model and tokenizer
-        if current_tp_rank == 0:
+        if tp_rank == 0:
             print(f"🔧 [TP_WORKER{prefix}] Creating model config...")
         self.model_config = ModelConfig.from_server_args(
             server_args,
@@ -88,10 +86,10 @@ class TpModelWorker:
             ),
             is_draft_model=is_draft_worker,
         )
-        if current_tp_rank == 0:
+        if tp_rank == 0:
             print(f"🔧 [TP_WORKER{prefix}] Model config created: {self.model_config}")
 
-        if current_tp_rank == 0:
+        if tp_rank == 0:
             print(f"🔧 [TP_WORKER{prefix}] Creating model runner...")
         self.model_runner = ModelRunner(
             model_config=self.model_config,
@@ -166,7 +164,7 @@ class TpModelWorker:
         self.worker = self
 
         self.hicache_layer_transfer_counter = None
-        if current_tp_rank == 0:
+        if tp_rank == 0:
             print(f"🔧 [TP_WORKER{prefix}] Tensor parallel worker initialized successfully")
 
     def register_hicache_layer_transfer_counter(self, counter):
