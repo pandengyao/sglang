@@ -123,15 +123,29 @@ def _get_quantization_config(
     packed_modules_mapping: Dict[str, List[str]],
 ) -> Optional[QuantizationConfig]:
     """Get the quantization config."""
+    print(f"🔧 [GET_QUANT_CONFIG] Starting quantization config resolution")
+    print(f"🔧 [GET_QUANT_CONFIG] Model quantization: {model_config.quantization}")
+    print(f"🔧 [GET_QUANT_CONFIG] Packed modules mapping: {packed_modules_mapping}")
+    
     if model_config.quantization is not None:
+        print(f"🔧 [GET_QUANT_CONFIG] Calling get_quant_config...")
         quant_config = get_quant_config(
             model_config, load_config, packed_modules_mapping
         )
+        print(f"🔧 [GET_QUANT_CONFIG] Raw quant config: {quant_config}")
+        
         # (yizhang2077) workaround for nvidia/Llama-4-Maverick-17B-128E-Eagle3
         if quant_config is None:
+            print(f"🔧 [GET_QUANT_CONFIG] Quant config is None, returning None")
             return None
+            
+        print(f"🔧 [GET_QUANT_CONFIG] Quant config class: {quant_config.__class__.__name__}")
+        print(f"🔧 [GET_QUANT_CONFIG] Quant config name: {getattr(quant_config, 'get_name', lambda: 'N/A')()}")
+        
         if not _is_npu:
+            print(f"🔧 [GET_QUANT_CONFIG] Checking device capability...")
             major, minor = get_device_capability()
+            print(f"🔧 [GET_QUANT_CONFIG] Device capability: major={major}, minor={minor}")
 
             if major is not None and minor is not None:
                 assert 0 <= minor < 10
@@ -143,14 +157,24 @@ def _get_quantization_config(
                         f"Minimum capability: {quant_config.get_min_capability()}. "
                         f"Current capability: {capability}."
                     )
+                print(f"🔧 [GET_QUANT_CONFIG] Device capability check passed")
+        
+        print(f"🔧 [GET_QUANT_CONFIG] Checking supported dtypes...")
         supported_dtypes = quant_config.get_supported_act_dtypes()
+        print(f"🔧 [GET_QUANT_CONFIG] Supported dtypes: {supported_dtypes}")
+        print(f"🔧 [GET_QUANT_CONFIG] Model dtype: {model_config.dtype}")
+        
         if model_config.dtype not in supported_dtypes:
             raise ValueError(
                 f"{model_config.dtype} is not supported for quantization "
                 f"method {model_config.quantization}. Supported dtypes: "
                 f"{supported_dtypes}"
             )
+        print(f"🔧 [GET_QUANT_CONFIG] Dtype check passed")
+        print(f"🔧 [GET_QUANT_CONFIG] Returning quant config: {quant_config}")
         return quant_config
+    
+    print(f"🔧 [GET_QUANT_CONFIG] No quantization specified, returning None")
     return None
 
 
@@ -159,24 +183,55 @@ def _initialize_model(
     load_config: LoadConfig,
 ) -> nn.Module:
     """Initialize a model with the given configurations."""
-    model_class, _ = get_model_architecture(model_config)
+    print(f"🔧 [INIT_MODEL] Starting model initialization")
+    print(f"🔧 [INIT_MODEL] Model config path: {model_config.model_path}")
+    print(f"🔧 [INIT_MODEL] Model config architectures: {model_config.hf_config.architectures}")
+    print(f"🔧 [INIT_MODEL] Model config model_type: {model_config.hf_config.model_type}")
+    print(f"🔧 [INIT_MODEL] Load config format: {load_config.load_format}")
+    
+    print(f"🔧 [INIT_MODEL] Calling get_model_architecture...")
+    model_class, architecture_name = get_model_architecture(model_config)
+    print(f"🔧 [INIT_MODEL] Resolved model class: {model_class.__name__}")
+    print(f"🔧 [INIT_MODEL] Architecture name: {architecture_name}")
+    print(f"🔧 [INIT_MODEL] Model class module: {model_class.__module__}")
+    
     packed_modules_mapping = getattr(model_class, "packed_modules_mapping", {})
+    print(f"🔧 [INIT_MODEL] Packed modules mapping: {packed_modules_mapping}")
+    
     if _is_npu:
+        print(f"🔧 [INIT_MODEL] NPU detected, updating packed_modules_mapping")
         packed_modules_mapping["fused_qkv_a_proj_with_mqa"] = [
             "q_a_proj",
             "kv_a_proj_with_mqa",
         ]
         packed_modules_mapping["qkv_proj"] = ["q_proj", "k_proj", "v_proj"]
         packed_modules_mapping["gate_up_proj"] = ["gate_proj", "up_proj"]
+        print(f"🔧 [INIT_MODEL] Updated packed_modules_mapping: {packed_modules_mapping}")
+    
+    print(f"🔧 [INIT_MODEL] Calling _get_quantization_config...")
     quant_config = _get_quantization_config(
         model_config, load_config, packed_modules_mapping
     )
-    print(f"📦 [MODEL_LOADER] model_config: {model_config}")
-    print(f"📦 [MODEL_LOADER] quant_config: {quant_config}")
-    return model_class(
+    print(f"🔧 [INIT_MODEL] Quantization config: {quant_config}")
+    if quant_config:
+        print(f"🔧 [INIT_MODEL] Quantization config class: {quant_config.__class__.__name__}")
+        print(f"🔧 [INIT_MODEL] Quantization config name: {getattr(quant_config, 'get_name', lambda: 'N/A')()}")
+    
+    print(f"🔧 [INIT_MODEL] Creating model instance...")
+    print(f"🔧 [INIT_MODEL] Model class: {model_class}")
+    print(f"🔧 [INIT_MODEL] HF config: {model_config.hf_config}")
+    print(f"🔧 [INIT_MODEL] Quant config: {quant_config}")
+    
+    model_instance = model_class(
         config=model_config.hf_config,
         quant_config=quant_config,
     )
+    
+    print(f"🔧 [INIT_MODEL] Model instance created: {type(model_instance).__name__}")
+    print(f"🔧 [INIT_MODEL] Model instance: {model_instance}")
+    print(f"🔧 [INIT_MODEL] Model initialization completed successfully")
+    
+    return model_instance
 
 
 class BaseModelLoader(ABC):

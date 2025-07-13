@@ -32,6 +32,20 @@ class MoeWNA16Config(QuantizationConfig):
         modules_to_not_convert: Optional[List[str]],
         full_config: Dict[str, Any],
     ) -> None:
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] Initializing MoeWNA16Config")
+                print(f"🔧 [MOE_WNA16_CONFIG] Parameters:")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - linear_quant_method: {linear_quant_method}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - weight_bits: {weight_bits}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - group_size: {group_size}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - has_zp: {has_zp}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - lm_head_quantized: {lm_head_quantized}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - modules_to_not_convert: {modules_to_not_convert}")
+        except:
+            pass
+        
         super().__init__()
         self.weight_bits = weight_bits
         self.group_size = group_size
@@ -45,6 +59,12 @@ class MoeWNA16Config(QuantizationConfig):
 
         if self.linear_quant_method == "gptq":
             self.use_marlin = GPTQMarlinConfig.is_gptq_marlin_compatible(full_config)
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] GPTQ method - use_marlin: {self.use_marlin}")
+            except:
+                pass
         elif self.linear_quant_method == "awq":
             capability_tuple = get_device_capability()
             device_capability = (
@@ -53,6 +73,12 @@ class MoeWNA16Config(QuantizationConfig):
                 else capability_tuple[0] * 10 + capability_tuple[1]
             )
             awq_min_capability = AWQConfig.get_min_capability()
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] AWQ method - device_capability: {device_capability}, min_capability: {awq_min_capability}")
+            except:
+                pass
             if device_capability < awq_min_capability:
                 raise ValueError(
                     "The quantization method moe_wna16 + awq is not supported "
@@ -67,6 +93,17 @@ class MoeWNA16Config(QuantizationConfig):
             self.modules_to_not_convert = []
         else:
             self.modules_to_not_convert = modules_to_not_convert
+        
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] MoeWNA16Config initialized successfully")
+                print(f"🔧 [MOE_WNA16_CONFIG] Final config:")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - bit8_pack_factor: {self.bit8_pack_factor}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - use_marlin: {self.use_marlin}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - modules_to_not_convert count: {len(self.modules_to_not_convert)}")
+        except:
+            pass
 
     @classmethod
     def get_name(cls) -> str:
@@ -89,21 +126,60 @@ class MoeWNA16Config(QuantizationConfig):
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "MoeWNA16Config":
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] Creating config from config dict")
+                print(f"🔧 [MOE_WNA16_CONFIG] Config keys: {list(config.keys())}")
+        except:
+            pass
+        
         quant_method = cls.get_from_keys(config, ["quant_method"])
         weight_bits = cls.get_from_keys(config, ["bits"])
         group_size = cls.get_from_keys(config, ["group_size"])
         lm_head_quantized = cls.get_from_keys_or(config, ["lm_head"], default=False)
+        
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] Extracted parameters:")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - quant_method: {quant_method}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - weight_bits: {weight_bits}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - group_size: {group_size}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - lm_head_quantized: {lm_head_quantized}")
+        except:
+            pass
+        
         if quant_method == "gptq":
             has_zp = not cls.get_from_keys(config, ["sym"])
             modules_to_not_convert = []
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] GPTQ config - has_zp: {has_zp}")
+            except:
+                pass
         elif quant_method == "awq":
             has_zp = cls.get_from_keys(config, ["zero_point"])
             modules_to_not_convert = cls.get_from_keys_or(
                 config, ["modules_to_not_convert"], None
             )
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] AWQ config - has_zp: {has_zp}, modules_to_not_convert: {modules_to_not_convert}")
+            except:
+                pass
         else:
             raise ValueError("moe_wna16 only support gptq and awq.")
 
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] Creating MoeWNA16Config instance")
+        except:
+            pass
+        
         return cls(
             quant_method,
             weight_bits,
@@ -148,30 +224,80 @@ class MoeWNA16Config(QuantizationConfig):
     def get_quant_method(
         self, layer: torch.nn.Module, prefix: str
     ) -> Optional["QuantizeMethodBase"]:
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] Getting quant method for layer: {type(layer).__name__}, prefix: {prefix}")
+        except:
+            pass
+        
         # avoid circular import
         from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 
         if is_layer_skipped_quant(prefix, self.modules_to_not_convert):
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] Layer skipped for quantization - returning UnquantizedLinearMethod")
+            except:
+                pass
             return UnquantizedLinearMethod()
         elif isinstance(layer, LinearBase):
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] LinearBase layer detected - using {self.linear_quant_method} method")
+            except:
+                pass
 
             if self.linear_quant_method == "gptq":
                 if self.use_marlin:
+                    try:
+                        current_tp_rank = get_tensor_model_parallel_rank()
+                        if current_tp_rank == 0:
+                            print(f"🔧 [MOE_WNA16_CONFIG] Using GPTQ Marlin method")
+                    except:
+                        pass
                     return GPTQMarlinConfig.from_config(
                         self.full_config
                     ).get_quant_method(layer, prefix)
                 else:
+                    try:
+                        current_tp_rank = get_tensor_model_parallel_rank()
+                        if current_tp_rank == 0:
+                            print(f"🔧 [MOE_WNA16_CONFIG] Using GPTQ method")
+                    except:
+                        pass
                     return GPTQConfig.from_config(self.full_config).get_quant_method(
                         layer, prefix
                     )
             elif self.linear_quant_method == "awq":
+                try:
+                    current_tp_rank = get_tensor_model_parallel_rank()
+                    if current_tp_rank == 0:
+                        print(f"🔧 [MOE_WNA16_CONFIG] Using AWQ method")
+                except:
+                    pass
                 return AWQConfig.from_config(self.full_config).get_quant_method(
                     layer, prefix
                 )
             else:
                 raise ValueError("moe_wna16 only support gptq and awq.")
         elif isinstance(layer, FusedMoE):
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] FusedMoE layer detected - returning MoeWNA16Method")
+            except:
+                pass
             return MoeWNA16Method(self)
+        
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] No matching quant method found - returning None")
+        except:
+            pass
         return None
 
 
@@ -190,19 +316,60 @@ class MoeWNA16Method:
         # avoid circular import
         from sglang.srt.layers.moe.fused_moe_triton import FusedMoEMethodBase
 
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16] Creating MoeWNA16Method instance with dynamic inheritance from FusedMoEMethodBase")
+        except:
+            pass
+
         if not hasattr(cls, "_initialized"):
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16] First time initialization - creating dynamic class composition")
+            except:
+                pass
+            # 保存原始的 __init__ 方法
             original_init = cls.__init__
+            
+            # 动态创建新类，继承自 FusedMoEMethodBase
             new_cls = type(
                 cls.__name__,
-                (FusedMoEMethodBase,),
+                (FusedMoEMethodBase,),  # 父类
                 {
-                    "__init__": original_init,
-                    **{k: v for k, v in cls.__dict__.items() if k != "__dict__"},
+                    "__init__": original_init,  # 保持原始初始化方法
+                    **{k: v for k, v in cls.__dict__.items() if k != "__dict__"},  # 复制其他方法
                 },
             )
+            
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16] Dynamic class created: {new_cls.__name__} inheriting from {FusedMoEMethodBase.__name__}")
+            except:
+                pass
+            
+            # 创建新类的实例并初始化
             obj = super(new_cls, new_cls).__new__(new_cls)
             obj.__init__(*args, **kwargs)
+            
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16] MoeWNA16Method instance created successfully with quant_config: {args[0].__class__.__name__ if args else 'None'}")
+            except:
+                pass
+            
             return obj
+        
+        # 如果已经初始化过，使用正常的实例化流程
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16] Using cached initialization - class already composed")
+        except:
+            pass
         return super().__new__(cls)
 
     def __init__(self, quant_config: MoeWNA16Config):
