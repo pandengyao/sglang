@@ -684,11 +684,7 @@ def _launch_subprocesses(
     """
     Launch the TokenizerManager in the main process, the Scheduler in a subprocess, and the DetokenizerManager in another subprocess.
     """
-    from sglang.srt.distributed import get_tensor_model_parallel_rank
-    tp_rank = get_tensor_model_parallel_rank()
-    
-    if tp_rank == 0:
-        print("🔧 [ENGINE] Starting to launch subprocesses...")
+    print("🔧 [ENGINE] Starting to launch subprocesses...")
     # Configure global environment
     configure_logger(server_args)
     server_args.check_server_args()
@@ -700,18 +696,15 @@ def _launch_subprocesses(
         logger.info(f"{server_args=}")
 
     # If using model from www.modelscope.cn, first download the model.
-    if tp_rank == 0:
-        print(f"🔧 [ENGINE] Preparing model and tokenizer from {server_args.model_path}")
+    print(f"🔧 [ENGINE] Preparing model and tokenizer from {server_args.model_path}")
     server_args.model_path, server_args.tokenizer_path = prepare_model_and_tokenizer(
         server_args.model_path, server_args.tokenizer_path
     )
-    if tp_rank == 0:
-        print(f"🔧 [ENGINE] Model path: {server_args.model_path}, Tokenizer path: {server_args.tokenizer_path}")
+    print(f"🔧 [ENGINE] Model path: {server_args.model_path}, Tokenizer path: {server_args.tokenizer_path}")
 
     scheduler_procs = []
     if server_args.dp_size == 1:
-        if tp_rank == 0:
-            print(f"🔧 [ENGINE] Launching single DP scheduler processes (tp_size={server_args.tp_size}, pp_size={server_args.pp_size})")
+        print(f"🔧 [ENGINE] Launching single DP scheduler processes (tp_size={server_args.tp_size}, pp_size={server_args.pp_size})")
         memory_saver_adapter = TorchMemorySaverAdapter.create(
             enable=server_args.enable_memory_saver
         )
@@ -759,8 +752,7 @@ def _launch_subprocesses(
                 scheduler_pipe_readers.append(reader)
     else:
         # Launch the data parallel controller
-        if tp_rank == 0:
-            print(f"🔧 [ENGINE] Launching data parallel controller (dp_size={server_args.dp_size})")
+        print(f"🔧 [ENGINE] Launching data parallel controller (dp_size={server_args.dp_size})")
         reader, writer = mp.Pipe(duplex=False)
         scheduler_pipe_readers = [reader]
         proc = mp.Process(
@@ -773,8 +765,7 @@ def _launch_subprocesses(
     if server_args.node_rank >= 1:
         # In multi-node cases, non-zero rank nodes do not need to run tokenizer or detokenizer,
         # so they can just wait here.
-        if tp_rank == 0:
-            print(f"🔧 [ENGINE] Non-zero rank node ({server_args.node_rank}), waiting for scheduler ready...")
+        print(f"🔧 [ENGINE] Non-zero rank node ({server_args.node_rank}), waiting for scheduler ready...")
 
         for reader in scheduler_pipe_readers:
             data = reader.recv()
@@ -794,8 +785,7 @@ def _launch_subprocesses(
         return None, None, None
 
     # Launch detokenizer process
-    if tp_rank == 0:
-        print("🔧 [ENGINE] Launching detokenizer process...")
+    print("🔧 [ENGINE] Launching detokenizer process...")
     detoken_proc = mp.Process(
         target=run_detokenizer_process,
         args=(
@@ -806,8 +796,7 @@ def _launch_subprocesses(
     detoken_proc.start()
 
     # Launch tokenizer process
-    if tp_rank == 0:
-        print("🔧 [ENGINE] Creating tokenizer manager...")
+    print("🔧 [ENGINE] Creating tokenizer manager...")
     tokenizer_manager = TokenizerManager(server_args, port_args)
 
     # Initialize templates
@@ -820,8 +809,7 @@ def _launch_subprocesses(
     )
 
     # Wait for the model to finish loading
-    if tp_rank == 0:
-        print("🔧 [ENGINE] Waiting for scheduler processes to finish model loading...")
+    print("🔧 [ENGINE] Waiting for scheduler processes to finish model loading...")
     scheduler_infos = []
     for i in range(len(scheduler_pipe_readers)):
         try:
@@ -843,6 +831,5 @@ def _launch_subprocesses(
     # Assume all schedulers have the same scheduler_info
     scheduler_info = scheduler_infos[0]
     tokenizer_manager.max_req_input_len = scheduler_info["max_req_input_len"]
-    if tp_rank == 0:
-        print(f"🔧 [ENGINE] All subprocesses ready! max_req_input_len={scheduler_info['max_req_input_len']}")
+    print(f"🔧 [ENGINE] All subprocesses ready! max_req_input_len={scheduler_info['max_req_input_len']}")
     return tokenizer_manager, template_manager, scheduler_info
