@@ -1,22 +1,58 @@
 # Adapted from https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/layers/quantization/moe_wna16.py
+from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+import numpy as np
 import torch
 
 from sglang.srt.distributed import get_tensor_model_parallel_rank
 from sglang.srt.distributed.parallel_state import get_tp_group
-from sglang.srt.layers.linear import LinearBase, UnquantizedLinearMethod
 from sglang.srt.layers.quantization.awq import AWQConfig
 from sglang.srt.layers.quantization.base_config import (
+    FusedMoEMethodBase,
     QuantizationConfig,
     QuantizeMethodBase,
 )
 from sglang.srt.layers.quantization.gptq import GPTQConfig, GPTQMarlinConfig
+from sglang.srt.layers.quantization.unquant import UnquantizedLinearMethod
 from sglang.srt.utils import get_device_capability, set_weight_attrs
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from sglang.srt.layers.moe.topk import TopKOutput
+
+
+def get_weight_perm(num_bits: int):
+    perm_list: List[int] = []
+    for i in range(32):
+        perm1: List[int] = []
+        col = i // 4
+        for block in [0, 1]:
+            for row in [
+                2 * (i % 4),
+                2 * (i % 4) + 1,
+                2 * (i % 4 + 4),
+                2 * (i % 4 + 4) + 1,
+            ]:
+                perm1.append(16 * row + col + 8 * block)
+        for j in range(4):
+            perm_list.extend([p + 256 * j for p in perm1])
+
+    perm = np.array(perm_list)
+
+    if num_bits == 4:
+        interleave = np.array([0, 2, 4, 6, 1, 3, 5, 7])
+    elif num_bits == 8:
+        interleave = np.array([0, 2, 1, 3])
+    else:
+        raise Exception("num_bits must be 4 or 8, got {}".format(num_bits))
+
+    perm = perm.reshape((-1, len(interleave)))[:, interleave].ravel()
+    perm = torch.from_numpy(perm)
+    return perm
 
 
 class MoeWNA16Config(QuantizationConfig):
@@ -125,15 +161,7 @@ class MoeWNA16Config(QuantizationConfig):
         raise NotImplementedError
 
     @classmethod
-    def from_config(cls, config: Dict[str, Any]) -> "MoeWNA16Config":
-        try:
-            current_tp_rank = get_tensor_model_parallel_rank()
-            if current_tp_rank == 0:
-                print(f"🔧 [MOE_WNA16_CONFIG] Creating config from config dict")
-                print(f"🔧 [MOE_WNA16_CONFIG] Config keys: {list(config.keys())}")
-        except:
-            pass
-        
+    def from_config(cls, config: Dict[str, Any]) -> MoeWNA16Config:
         quant_method = cls.get_from_keys(config, ["quant_method"])
         weight_bits = cls.get_from_keys(config, ["bits"])
         group_size = cls.get_from_keys(config, ["group_size"])
@@ -223,15 +251,9 @@ class MoeWNA16Config(QuantizationConfig):
 
     def get_quant_method(
         self, layer: torch.nn.Module, prefix: str
-    ) -> Optional["QuantizeMethodBase"]:
-        try:
-            current_tp_rank = get_tensor_model_parallel_rank()
-            if current_tp_rank == 0:
-                print(f"🔧 [MOE_WNA16_CONFIG] Getting quant method for layer: {type(layer).__name__}, prefix: {prefix}")
-        except:
-            pass
-        
+    ) -> Optional[QuantizeMethodBase]:
         # avoid circular import
+        from sglang.srt.layers.linear import LinearBase
         from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 
         if is_layer_skipped_quant(prefix, self.modules_to_not_convert):
@@ -305,72 +327,12 @@ def is_layer_skipped_quant(prefix: str, modules_to_not_convert: List[str]):
     return any(module_name in prefix for module_name in modules_to_not_convert)
 
 
-class MoeWNA16Method:
+class MoeWNA16Method(FusedMoEMethodBase):
     """Linear method for MOE WNA16 (W8A16/W4A16) quantization.
 
     Args:
         quant_config: The MOE WNA16 (W8A16/W4A16) quantization config.
     """
-
-    def __new__(cls, *args, **kwargs):
-        # avoid circular import
-        from sglang.srt.layers.moe.fused_moe_triton import FusedMoEMethodBase
-
-        try:
-            current_tp_rank = get_tensor_model_parallel_rank()
-            if current_tp_rank == 0:
-                print(f"🔧 [MOE_WNA16] Creating MoeWNA16Method instance with dynamic inheritance from FusedMoEMethodBase")
-        except:
-            pass
-
-        if not hasattr(cls, "_initialized"):
-            try:
-                current_tp_rank = get_tensor_model_parallel_rank()
-                if current_tp_rank == 0:
-                    print(f"🔧 [MOE_WNA16] First time initialization - creating dynamic class composition")
-            except:
-                pass
-            # 保存原始的 __init__ 方法
-            original_init = cls.__init__
-            
-            # 动态创建新类，继承自 FusedMoEMethodBase
-            new_cls = type(
-                cls.__name__,
-                (FusedMoEMethodBase,),  # 父类
-                {
-                    "__init__": original_init,  # 保持原始初始化方法
-                    **{k: v for k, v in cls.__dict__.items() if k != "__dict__"},  # 复制其他方法
-                },
-            )
-            
-            try:
-                current_tp_rank = get_tensor_model_parallel_rank()
-                if current_tp_rank == 0:
-                    print(f"🔧 [MOE_WNA16] Dynamic class created: {new_cls.__name__} inheriting from {FusedMoEMethodBase.__name__}")
-            except:
-                pass
-            
-            # 创建新类的实例并初始化
-            obj = super(new_cls, new_cls).__new__(new_cls)
-            obj.__init__(*args, **kwargs)
-            
-            try:
-                current_tp_rank = get_tensor_model_parallel_rank()
-                if current_tp_rank == 0:
-                    print(f"🔧 [MOE_WNA16] MoeWNA16Method instance created successfully with quant_config: {args[0].__class__.__name__ if args else 'None'}")
-            except:
-                pass
-            
-            return obj
-        
-        # 如果已经初始化过，使用正常的实例化流程
-        try:
-            current_tp_rank = get_tensor_model_parallel_rank()
-            if current_tp_rank == 0:
-                print(f"🔧 [MOE_WNA16] Using cached initialization - class already composed")
-        except:
-            pass
-        return super().__new__(cls)
 
     def __init__(self, quant_config: MoeWNA16Config):
         self.quant_config = quant_config
@@ -563,15 +525,8 @@ class MoeWNA16Method:
         self,
         layer: torch.nn.Module,
         x: torch.Tensor,
-        router_logits: torch.Tensor,
-        top_k: int,
-        renormalize: bool,
-        use_grouped_topk: bool = False,
-        topk_group: Optional[int] = None,
-        num_expert_group: Optional[int] = None,
-        num_fused_shared_experts: int = 0,
-        custom_routing_function: Optional[Callable] = None,
-        correction_bias: Optional[torch.Tensor] = None,
+        topk_output: TopKOutput,
+        *,
         activation: str = "silu",
         apply_router_weight_on_input: bool = False,
         inplace: bool = True,
@@ -580,46 +535,8 @@ class MoeWNA16Method:
     ) -> torch.Tensor:
         # avoid circular import
         from sglang.srt.layers.moe.fused_moe_triton.fused_moe import fused_experts
-        from sglang.srt.layers.moe.topk import select_experts
-        from sglang.srt.distributed import get_tensor_model_parallel_rank
-        
-        tp_rank = get_tensor_model_parallel_rank()
-
-        if tp_rank == 0:
-            print(f"🔧 [WNA16_MOE] Starting WNA16 MoE inference")
-            print(f"🔧 [WNA16_MOE] Input shape: {x.shape}, dtype: {x.dtype}")
-            print(f"🔧 [WNA16_MOE] Router logits shape: {router_logits.shape}")
-            print(f"🔧 [WNA16_MOE] Top-k: {top_k}, activation: {activation}")
-            print(f"🔧 [WNA16_MOE] Weight bits: {self.quant_config.weight_bits}")
-            print(f"🔧 [WNA16_MOE] Has zero points: {self.quant_config.has_zp}")
-            print(f"🔧 [WNA16_MOE] Linear quant method: {self.quant_config.linear_quant_method}")
 
         assert activation == "silu", "Only SiLU activation is supported."
-        topk_weights, topk_ids = select_experts(
-            hidden_states=x,
-            router_logits=router_logits,
-            top_k=top_k,
-            use_grouped_topk=use_grouped_topk,
-            renormalize=renormalize,
-            topk_group=topk_group,
-            num_expert_group=num_expert_group,
-            num_fused_shared_experts=num_fused_shared_experts,
-            custom_routing_function=custom_routing_function,
-            correction_bias=correction_bias,
-            routed_scaling_factor=routed_scaling_factor,
-        )
-
-        if tp_rank == 0:
-            print(f"🔧 [WNA16_MOE] Expert selection completed")
-            print(f"🔧 [WNA16_MOE] Top-k weights shape: {topk_weights.shape}")
-            print(f"🔧 [WNA16_MOE] Top-k IDs shape: {topk_ids.shape}")
-            print(f"🔧 [WNA16_MOE] W13 qweight shape: {layer.w13_qweight.shape}")
-            print(f"🔧 [WNA16_MOE] W2 qweight shape: {layer.w2_qweight.shape}")
-            print(f"🔧 [WNA16_MOE] W13 scales shape: {layer.w13_scales.shape}")
-            print(f"🔧 [WNA16_MOE] W2 scales shape: {layer.w2_scales.shape}")
-            if self.quant_config.has_zp:
-                print(f"🔧 [WNA16_MOE] W13 qzeros shape: {layer.w13_qzeros.shape}")
-                print(f"🔧 [WNA16_MOE] W2 qzeros shape: {layer.w2_qzeros.shape}")
 
         weight_bits = self.quant_config.weight_bits
         has_zp = self.quant_config.has_zp
@@ -635,8 +552,7 @@ class MoeWNA16Method:
             x,
             layer.w13_qweight,
             layer.w2_qweight,
-            topk_weights=topk_weights,
-            topk_ids=topk_ids,
+            topk_output=topk_output,
             inplace=inplace,
             apply_router_weight_on_input=apply_router_weight_on_input,
             use_int4_w4a16=weight_bits == 4,

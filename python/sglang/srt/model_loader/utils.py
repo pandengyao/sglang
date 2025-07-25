@@ -56,14 +56,14 @@ def resolve_transformers_arch(model_config: ModelConfig, architectures: list[str
                     "if the model is custom)."
                 )
             model_module = auto_modules["AutoModel"]
-        if model_config.impl == ModelImpl.TRANSFORMERS:
+        if model_config.model_impl == ModelImpl.TRANSFORMERS:
             if not model_module.is_backend_compatible():
                 raise ValueError(
                     f"The Transformers implementation of {arch} is not "
-                    "compatible with vLLM."
+                    "compatible with SGLang."
                 )
             architectures[i] = "TransformersForCausalLM"
-        if model_config.impl == ModelImpl.AUTO:
+        if model_config.model_impl == ModelImpl.AUTO:
             if not model_module.is_backend_compatible():
                 raise ValueError(
                     f"{arch} has no SGlang implementation and the Transformers "
@@ -82,14 +82,6 @@ def resolve_transformers_arch(model_config: ModelConfig, architectures: list[str
 def get_model_architecture(model_config: ModelConfig) -> Tuple[Type[nn.Module], str]:
     from sglang.srt.models.registry import ModelRegistry
 
-    # Get TP rank from current context
-    from sglang.srt.distributed import get_tensor_model_parallel_rank
-    tp_rank = get_tensor_model_parallel_rank()
-
-    if tp_rank == 0:
-        print(f"🔧 [GET_MODEL_ARCH] Starting model architecture resolution")
-        print(f"🔧 [GET_MODEL_ARCH] Model config: {model_config}")
-    
     architectures = getattr(model_config.hf_config, "architectures", [])
     if tp_rank == 0:
         print(f"🔧 [GET_MODEL_ARCH] Original architectures: {architectures}")
@@ -121,9 +113,7 @@ def get_model_architecture(model_config: ModelConfig) -> Tuple[Type[nn.Module], 
         print(f"🔧 [GET_MODEL_ARCH] Is native supported: {is_native_supported}")
         print(f"🔧 [GET_MODEL_ARCH] Model implementation: {model_config.impl}")
 
-    if not is_native_supported or model_config.impl == ModelImpl.TRANSFORMERS:
-        if tp_rank == 0:
-            print(f"🔧 [GET_MODEL_ARCH] Using transformers backend, calling resolve_transformers_arch")
+    if not is_native_supported or model_config.model_impl == ModelImpl.TRANSFORMERS:
         architectures = resolve_transformers_arch(model_config, architectures)
         if tp_rank == 0:
             print(f"🔧 [GET_MODEL_ARCH] Resolved architectures: {architectures}")
