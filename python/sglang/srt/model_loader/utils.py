@@ -82,25 +82,61 @@ def resolve_transformers_arch(model_config: ModelConfig, architectures: list[str
 def get_model_architecture(model_config: ModelConfig) -> Tuple[Type[nn.Module], str]:
     from sglang.srt.models.registry import ModelRegistry
 
+    # Get TP rank from current context
+    from sglang.srt.distributed import get_tensor_model_parallel_rank
+    tp_rank = get_tensor_model_parallel_rank()
+
+    if tp_rank == 0:
+        print(f"🔧 [GET_MODEL_ARCH] Starting model architecture resolution")
+        print(f"🔧 [GET_MODEL_ARCH] Model config: {model_config}")
+    
     architectures = getattr(model_config.hf_config, "architectures", [])
+    if tp_rank == 0:
+        print(f"🔧 [GET_MODEL_ARCH] Original architectures: {architectures}")
+    
     # Special handling for quantized Mixtral.
     # FIXME(woosuk): This is a temporary hack.
     mixtral_supported = ["fp8", "compressed-tensors", "gptq_marlin", "awq_marlin"]
+    if tp_rank == 0:
+        print(f"🔧 [GET_MODEL_ARCH] Mixtral supported quantizations: {mixtral_supported}")
+        print(f"🔧 [GET_MODEL_ARCH] Model quantization: {model_config.quantization}")
 
     if (
         model_config.quantization is not None
         and model_config.quantization not in mixtral_supported
         and "MixtralForCausalLM" in architectures
     ):
+        if tp_rank == 0:
+            print(f"🔧 [GET_MODEL_ARCH] Special case: Using QuantMixtralForCausalLM for quantized Mixtral")
         architectures = ["QuantMixtralForCausalLM"]
+        if tp_rank == 0:
+            print(f"🔧 [GET_MODEL_ARCH] Updated architectures: {architectures}")
 
     supported_archs = ModelRegistry.get_supported_archs()
+    if tp_rank == 0:
+        print(f"🔧 [GET_MODEL_ARCH] Supported architectures: {supported_archs}")
+    
     is_native_supported = any(arch in supported_archs for arch in architectures)
+    if tp_rank == 0:
+        print(f"🔧 [GET_MODEL_ARCH] Is native supported: {is_native_supported}")
+        print(f"🔧 [GET_MODEL_ARCH] Model implementation: {model_config.impl}")
 
     if not is_native_supported or model_config.impl == ModelImpl.TRANSFORMERS:
+        if tp_rank == 0:
+            print(f"🔧 [GET_MODEL_ARCH] Using transformers backend, calling resolve_transformers_arch")
         architectures = resolve_transformers_arch(model_config, architectures)
+        if tp_rank == 0:
+            print(f"🔧 [GET_MODEL_ARCH] Resolved architectures: {architectures}")
 
-    return ModelRegistry.resolve_model_cls(architectures)
+    if tp_rank == 0:
+        print(f"🔧 [GET_MODEL_ARCH] Calling ModelRegistry.resolve_model_cls with architectures: {architectures}")
+    result = ModelRegistry.resolve_model_cls(architectures)
+    if tp_rank == 0:
+        print(f"🔧 [GET_MODEL_ARCH] ModelRegistry result: {result}")
+        print(f"🔧 [GET_MODEL_ARCH] Resolved model class: {result[0].__name__}")
+        print(f"🔧 [GET_MODEL_ARCH] Resolved architecture name: {result[1]}")
+    
+    return result
 
 
 def get_architecture_class_name(model_config: ModelConfig) -> str:

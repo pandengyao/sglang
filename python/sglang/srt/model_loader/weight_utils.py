@@ -528,6 +528,10 @@ def multi_thread_safetensors_weights_iterator(
         for future in futures_iter:
             state_dict = future.result()
             for name, param in state_dict.items():
+                print(f"📁 [SAFETENSORS] Loading tensor: {name}")
+                print(f"📁 [SAFETENSORS]   - Shape: {param.shape}")
+                print(f"📁 [SAFETENSORS]   - Dtype: {param.dtype}")
+                print(f"📁 [SAFETENSORS]   - Device: {param.device}")
                 yield name, param
 
 

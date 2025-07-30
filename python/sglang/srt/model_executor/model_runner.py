@@ -172,8 +172,10 @@ class ModelRunner:
 
         prefix = f" TP{tp_rank}" if tp_size > 1 else ""
         prefix += f" PP{pp_rank}" if pp_size > 1 else ""
-        print(f"🤖 [MODEL_RUNNER{prefix}] Initializing model runner...")
-        print(f"🤖 [MODEL_RUNNER{prefix}] Device: {self.device}, GPU ID: {gpu_id}")
+        
+        if tp_rank == 0:
+            print(f"🤖 [MODEL_RUNNER{prefix}] Initializing model runner...")
+            print(f"🤖 [MODEL_RUNNER{prefix}] Device: {self.device}, GPU ID: {gpu_id}")
 
         # Apply the rank zero filter to logger
         if not any(isinstance(f, RankZeroFilter) for f in logger.filters):
@@ -581,7 +583,9 @@ class ModelRunner:
     def load_model(self):
         prefix = f" TP{self.tp_rank}" if self.tp_size > 1 else ""
         prefix += f" PP{self.pp_rank}" if self.pp_size > 1 else ""
-        print(f"🤖 [MODEL_RUNNER{prefix}] Starting model loading...")
+        
+        if self.tp_rank == 0:
+            print(f"🤖 [MODEL_RUNNER{prefix}] Starting model loading...")
         before_avail_memory = get_available_gpu_memory(self.device, self.gpu_id)
         logger.info(
             f"Load weight begin. avail mem={get_available_gpu_memory(self.device, self.gpu_id):.2f} GB"
@@ -603,7 +607,8 @@ class ModelRunner:
         set_cuda_arch()
 
         # Prepare the model config
-        print(f"🤖 [MODEL_RUNNER{prefix}] Preparing load config...")
+        if self.tp_rank == 0:
+            print(f"🤖 [MODEL_RUNNER{prefix}] Preparing load config...")
         self.load_config = LoadConfig(
             load_format=self.server_args.load_format,
             download_dir=self.server_args.download_dir,
@@ -617,7 +622,8 @@ class ModelRunner:
             monkey_patch_vllm_gguf_config()
 
         # Load the model
-        print(f"🤖 [MODEL_RUNNER{prefix}] Loading model from {self.model_config.model_path}...")
+        if self.tp_rank == 0:
+            print(f"🤖 [MODEL_RUNNER{prefix}] Loading model from {self.model_config.model_path}...")
         # Remove monkey_patch when linear.py quant remove dependencies with vllm
         monkey_patch_vllm_parallel_state()
         monkey_patch_isinstance_for_vllm_base_layer()
@@ -630,7 +636,8 @@ class ModelRunner:
             )
         monkey_patch_vllm_parallel_state(reverse=True)
         monkey_patch_isinstance_for_vllm_base_layer(reverse=True)
-        print(f"🤖 [MODEL_RUNNER{prefix}] Model loaded successfully, type: {type(self.model).__name__}")
+        if self.tp_rank == 0:
+            print(f"🤖 [MODEL_RUNNER{prefix}] Model loaded successfully, type: {type(self.model).__name__}")
 
         if self.server_args.kv_cache_dtype == "fp8_e4m3":
             if self.server_args.quantization_param_path is not None:
@@ -675,13 +682,15 @@ class ModelRunner:
 
         # Handle the case where some ranks do not finish loading.
         try:
-            print(f"🤖 [MODEL_RUNNER{prefix}] Waiting for all TP ranks to finish loading...")
+            if self.tp_rank == 0:
+                print(f"🤖 [MODEL_RUNNER{prefix}] Waiting for all TP ranks to finish loading...")
             dist.monitored_barrier(
                 group=get_tp_group().cpu_group,
                 timeout=datetime.timedelta(seconds=UNBALANCED_MODEL_LOADING_TIMEOUT_S),
                 wait_all_ranks=True,
             )
-            print(f"🤖 [MODEL_RUNNER{prefix}] All TP ranks finished loading successfully")
+            if self.tp_rank == 0:
+                print(f"🤖 [MODEL_RUNNER{prefix}] All TP ranks finished loading successfully")
         except RuntimeError:
             raise ValueError(
                 f"TP rank {self.tp_rank} could finish the model loading, but there are other ranks that didn't finish loading. It is likely due to unexpected failures (e.g., OOM) or a slow node."

@@ -30,6 +30,26 @@ def get_cutlass_w4a8_moe_mm_data(
     - output_permutation: Permutation that must be used to shuffle the output
                           after executing the MMs.
     """
+    # 该函数用于准备 CUTLASS 分组矩阵乘法（grouped GEMM）所需的各种调度和索引信息，
+    # 以支持高效的 W4A8 量化 MoE 前向。
+    #
+    # 参数说明：
+    #   topk_ids: [num_tokens]，每个 token 分配到的 expert id
+    #   expert_offsets: [num_experts+1]，每个 expert 处理的 token 区间（输出）
+    #   problem_sizes1, problem_sizes2: [num_experts, 3]，每个 expert 的 GEMM 问题规模（输出）
+    #   input_permutation: [num_tokens]，输入重排索引（输出）
+    #   output_permutation: [num_tokens]，输出重排索引（输出）
+    #   num_experts: 专家数
+    #   n, k: GEMM 的输出/输入隐藏维度
+    #
+    # 该函数本身是对底层 C++/CUDA 扩展（torch.ops.sgl_kernel.get_cutlass_w4a8_moe_mm_data）的封装，
+    # 主要作用是：
+    #   1. 根据 token->expert 分配（topk_ids），对 token 进行排序和分组，便于后续分组 GEMM。
+    #   2. 计算每个 expert 处理的 token 区间（expert_offsets），用于分组边界。
+    #   3. 计算每个 expert 的 GEMM 问题规模（problem_sizes1, problem_sizes2），即 M/N/K。
+    #   4. 生成输入/输出重排索引（input_permutation, output_permutation），保证数据顺序正确。
+    #
+    # 这些信息会被后续的 cutlass_w4a8_moe_mm kernel 用于高效地并行执行所有 expert 的 GEMM。
     torch.ops.sgl_kernel.get_cutlass_w4a8_moe_mm_data.default(
         topk_ids,
         expert_offsets,

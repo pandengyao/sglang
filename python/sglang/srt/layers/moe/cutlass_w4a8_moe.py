@@ -83,9 +83,12 @@ def cutlass_w4a8_moe(
     Returns:
     - torch.Tensor: The fp8 output tensor after applying the MoE layer.
     """
+    # ========== 参数和形状检查 ========== #
     assert topk_weights.shape == topk_ids_.shape, "topk shape mismatch"
+    # 检查门控权重和分配id形状一致
     assert w1_q.dtype == torch.int8
     assert w2_q.dtype == torch.int8
+    # 检查权重量化类型
     assert a.shape[1] // 2 == w1_q.shape[2], "Hidden size mismatch w1"
     assert w1_q.shape[2] * 2 == w2_q.shape[1], "Hidden size mismatch w2"
     assert w1_q.shape[0] == w2_q.shape[0], "Expert number mismatch"
@@ -99,33 +102,47 @@ def cutlass_w4a8_moe(
         w2_scale.shape[1] == w2_q.shape[2] * 2 / 512
         and w2_scale.shape[2] == w2_q.shape[1] * 4
     ), "W2 scale shape mismatch"
-
+    # 以上assert用于保证输入/权重/scale的形状兼容性，防止后续计算出错
     assert a_strides1.shape[0] == w1_q.shape[0], "A Strides 1 expert number mismatch"
     assert b_strides1.shape[0] == w1_q.shape[0], "B Strides 1 expert number mismatch"
     assert a_strides2.shape[0] == w2_q.shape[0], "A Strides 2 expert number  mismatch"
     assert b_strides2.shape[0] == w2_q.shape[0], "B Strides 2 expert number mismatch"
+    # 检查stride参数的专家数量一致
+
+    # ========== 变量初始化 ========== #
     num_experts = w1_q.size(0)
-    m = a.size(0)
+    m = a.size(0)  # token数
     k = w1_q.size(2) * 2  # w1_q is transposed and packed
     n = w2_q.size(2) * 2  # w2_q is transposed and packed
     topk = topk_ids_.size(1)
+    # num_experts: 本地专家数；m: token数；k: 输入隐藏维度；n: 输出隐藏维度；topk: 每个token分配的expert数
 
+    # 如果要求在输入端应用门控权重，只支持topk=1
     if apply_router_weight_on_input:
         assert topk == 1, "apply_router_weight_on_input is only implemented for topk=1"
 
     device = a.device
 
+    # ========== 预处理：生成token到expert的映射 ========== #
+    # src2dst用于后续数据重排，便于分组GEMM
     _, src2dst, _ = run_cutlass_moe_ep_preproess(
         local_topk_ids,
         num_experts,
     )
 
+    # ========== 输入重排和量化 ========== #
+    # gateup_input: 量化后的输入，形状[m*topk, k]，float8存储
     gateup_input = torch.empty(
         (m * topk, k),
         device=device,
         dtype=torch.float8_e4m3fn,
     )
-
+    
+    # 用triton kernel将输入a重排并量化到gateup_input
+    # 该 kernel 实现了：
+    #   1. 按 token->expert 分配重排输入数据
+    #   2. 可选做归一化/量化
+    #   3. 支持批量高效处理，便于后续分组 GEMM
     pre_reorder_triton_kernel_for_cutlass_moe[(m,)](
         a,
         gateup_input,
@@ -138,9 +155,11 @@ def cutlass_w4a8_moe(
         BLOCK_SIZE=512,
     )
 
+    # ========== 生成GEMM调度信息 ========== #
     # NOTE: a_map and c_map are not used in the get_cutlass_w4a8_moe_mm_data kernel,
     # they are kept to allow for a quick switch of the permutation logic
     # from the current triton kernel implementation to the cutlass-based one if needed.
+    # a_map/c_map用于后续可能的重排逻辑（当前未用）
     a_map = torch.empty((local_topk_ids.numel()), dtype=torch.int32, device=device)
     c_map = torch.empty((local_topk_ids.numel()), dtype=torch.int32, device=device)
     get_cutlass_w4a8_moe_mm_data(
@@ -155,9 +174,12 @@ def cutlass_w4a8_moe(
         k,
     )
 
+    # ========== 第一次GEMM（专家MLP的第一层） ========== #
+    # c1: GEMM1输出，half精度
     c1 = torch.empty((m * topk, n * 2), device=device, dtype=torch.half)
+    # c2: GEMM2输出，half精度
     c2 = torch.zeros((m * topk, k), device=device, dtype=torch.half)
-
+    # 用cutlass kernel做分组GEMM，输入为gateup_input和w1_q，输出到c1
     cutlass_w4a8_moe_mm(
         c1,
         gateup_input,
@@ -174,14 +196,18 @@ def cutlass_w4a8_moe(
         topk,
     )
 
+    # ========== 激活函数（SILU）和中间量量化 ========== #
+    # intermediate: 激活后结果
     intermediate = torch.empty((m * topk, n), device=device, dtype=torch.half)
     silu_and_mul(c1, intermediate)
-
+    # intermediate_q: 量化到float8
     intermediate_q = torch.empty(
         intermediate.shape, dtype=torch.float8_e4m3fn, device=device
     )
     sgl_per_tensor_quant_fp8(intermediate, intermediate_q, a2_scale.float(), True)
 
+    # ========== 第二次GEMM（专家MLP的第二层） ========== #
+    # 用cutlass kernel做分组GEMM，输入为intermediate_q和w2_q，输出到c2
     cutlass_w4a8_moe_mm(
         c2,
         intermediate_q,
@@ -198,7 +224,10 @@ def cutlass_w4a8_moe(
         topk,
     )
 
+    # ========== 输出重排和门控权重应用 ========== #
+    # output: 最终输出，形状与输入a一致
     output = torch.empty_like(a)
+    # 用triton kernel将c2重排回原token顺序，并应用门控权重
     post_reorder_triton_kernel[(m,)](
         c2,
         output,

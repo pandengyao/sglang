@@ -53,6 +53,7 @@ from sglang.srt.utils import (
     get_bool_env_var,
     is_hip,
     is_npu,
+    log_info_on_rank0,
     set_weight_attrs,
 )
 
@@ -197,6 +198,8 @@ class EPMoE(torch.nn.Module):
         ), "num_fused_shared_experts is not supported in EP"
         self.num_fused_shared_experts = num_fused_shared_experts
         self.num_experts_per_partition, self.expert_map = self.determine_expert_map()
+        log_info_on_rank0(logger, f"[EPMoE.init] self.layer_id={self.layer_id}, self.num_experts_per_partition={self.num_experts_per_partition}")
+        log_info_on_rank0(logger, f"[EPMoE.init] self.layer_id={self.layer_id}, self.expert_map: shape={self.expert_map.shape}, dtype={self.expert_map.dtype}")
         self.start_expert_id = self.tp_rank * self.num_experts_per_partition
         self.end_expert_id = self.start_expert_id + self.num_experts_per_partition - 1
 
@@ -315,6 +318,8 @@ class EPMoE(torch.nn.Module):
         return (local_num_experts, expert_map)
 
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
+        log_info_on_rank0(logger, f"[EPMoE.forward] self.layer_id={self.layer_id}, hidden_states: shape={hidden_states.shape}, dtype={hidden_states.dtype}")
+        log_info_on_rank0(logger, f"[EPMoE.forward] self.layer_id={self.layer_id}, router_logits: shape={router_logits.shape}, dtype={router_logits.dtype}")
         if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM and self.use_fp8_w8a8:
             return self.forward_deepgemm(hidden_states, router_logits)
         else:
@@ -500,7 +505,8 @@ class EPMoE(torch.nn.Module):
                 layer_id=self.layer_id,
             ),
         )
-
+        log_info_on_rank0(logger, f"topk_weights: shape={topk_weights.shape}, dtype={topk_weights.dtype}")
+        log_info_on_rank0(logger, f"topk_ids: shape={topk_ids.shape}, dtype={topk_ids.dtype}")
         if self.use_w4afp8:
             local_topk_ids = topk_ids
             if self.expert_map is not None:
@@ -510,34 +516,56 @@ class EPMoE(torch.nn.Module):
                     self.expert_map[topk_ids],
                     self.num_experts,
                 )
+            log_info_on_rank0(logger, f"local_topk_ids: shape={local_topk_ids.shape}, dtype={local_topk_ids.dtype}")
 
+            log_info_on_rank0(logger, f"self.start_expert_id={self.start_expert_id}")
+            log_info_on_rank0(logger, f"self.end_expert_id={self.end_expert_id}")
+            log_info_on_rank0(logger, f"self.num_experts={self.num_experts}")
+            log_info_on_rank0(logger, f"self.w13_weight: shape={self.w13_weight.shape}, dtype={self.w13_weight.dtype}")
+            log_info_on_rank0(logger, f"self.w2_weight: shape={self.w2_weight.shape}, dtype={self.w2_weight.dtype}")
+            log_info_on_rank0(logger, f"self.w13_weight_scale_inv: shape={self.w13_weight_scale_inv.shape}, dtype={self.w13_weight_scale_inv.dtype}")
+            log_info_on_rank0(logger, f"self.w2_weight_scale_inv: shape={self.w2_weight_scale_inv.shape}, dtype={self.w2_weight_scale_inv.dtype}")
+            log_info_on_rank0(logger, f"self.quant_method.a_strides1: shape={self.quant_method.a_strides1.shape}, dtype={self.quant_method.a_strides1.dtype}")
+            log_info_on_rank0(logger, f"self.quant_method.b_strides1: shape={self.quant_method.b_strides1.shape}, dtype={self.quant_method.b_strides1.dtype}")
+            log_info_on_rank0(logger, f"self.quant_method.c_strides1: shape={self.quant_method.c_strides1.shape}, dtype={self.quant_method.c_strides1.dtype}")
+            log_info_on_rank0(logger, f"self.quant_method.a_strides2: shape={self.quant_method.a_strides2.shape}, dtype={self.quant_method.a_strides2.dtype}")
+            log_info_on_rank0(logger, f"self.quant_method.b_strides2: shape={self.quant_method.b_strides2.shape}, dtype={self.quant_method.b_strides2.dtype}")
+            log_info_on_rank0(logger, f"self.quant_method.c_strides2: shape={self.quant_method.c_strides2.shape}, dtype={self.quant_method.c_strides2.dtype}")
+            log_info_on_rank0(logger, f"self.quant_method.s_strides13: shape={self.quant_method.s_strides13.shape}, dtype={self.quant_method.s_strides13.dtype}")
+            log_info_on_rank0(logger, f"self.quant_method.expert_offsets: shape={self.quant_method.expert_offsets.shape}, dtype={self.quant_method.expert_offsets.dtype}")
+            log_info_on_rank0(logger, f"self.quant_method.problem_sizes1: shape={self.quant_method.problem_sizes1.shape}, dtype={self.quant_method.problem_sizes1.dtype}")
+            log_info_on_rank0(logger, f"self.quant_method.problem_sizes2: shape={self.quant_method.problem_sizes2.shape}, dtype={self.quant_method.problem_sizes2.dtype}")
+            log_info_on_rank0(logger, f"self.w13_input_scale: shape={self.w13_input_scale.shape}, dtype={self.w13_input_scale.dtype}")
+            log_info_on_rank0(logger, f"self.w2_input_scale: shape={self.w2_input_scale.shape}, dtype={self.w2_input_scale.dtype}")
+            
             output = cutlass_w4a8_moe(
-                self.start_expert_id,
-                self.end_expert_id,
-                self.num_experts,
-                hidden_states,
-                self.w13_weight,
-                self.w2_weight,
-                self.w13_weight_scale_inv,
-                self.w2_weight_scale_inv,
-                topk_weights,
-                topk_ids,
-                local_topk_ids,
-                self.quant_method.a_strides1,
-                self.quant_method.b_strides1,
-                self.quant_method.c_strides1,
-                self.quant_method.a_strides2,
-                self.quant_method.b_strides2,
-                self.quant_method.c_strides2,
-                self.quant_method.s_strides13,
-                self.quant_method.s_strides2,
-                self.quant_method.expert_offsets,
-                self.quant_method.problem_sizes1,
-                self.quant_method.problem_sizes2,
-                self.w13_input_scale,
-                self.w2_input_scale,
+                self.start_expert_id, #self.start_expert_id=0
+                self.end_expert_id,   #self.end_expert_id=63
+                self.num_experts,     #self.num_experts=256
+                hidden_states,   #shape=torch.Size([32, 7168]), dtype=torch.bfloat16
+                self.w13_weight, #shape=torch.Size([64, 4096, 3584]), dtype=torch.int8
+                self.w2_weight,  #shape=torch.Size([64, 7168, 1024]), dtype=torch.int8
+                self.w13_weight_scale_inv, #shape=torch.Size([64, 14, 16384]), dtype=torch.bfloat16
+                self.w2_weight_scale_inv,  #shape=torch.Size([64, 4, 28672]), dtype=torch.bfloat16
+                topk_weights,  #shape=torch.Size([32, 8]), dtype=torch.float32
+                topk_ids,      #shape=torch.Size([32, 8]), dtype=torch.int64
+                local_topk_ids,#shape=torch.Size([32, 8]), dtype=torch.int32
+                self.quant_method.a_strides1,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.b_strides1,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.c_strides1,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.a_strides2,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.b_strides2,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.c_strides2,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.s_strides13, #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.s_strides2,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.expert_offsets, #shape=torch.Size([65]), dtype=torch.int32
+                self.quant_method.problem_sizes1, #shape=torch.Size([64, 3]), dtype=torch.int32
+                self.quant_method.problem_sizes2, #shape=torch.Size([64, 3]), dtype=torch.int32
+                self.w13_input_scale, #shape=torch.Size([1]), dtype=torch.bfloat16
+                self.w2_input_scale,  #shape=torch.Size([1]), dtype=torch.bfloat16
             )
-            return output
+            log_info_on_rank0(logger, f"output: shape={output.shape}, dtype={output.dtype}")
+            return output #shape=torch.Size([32, 7168]), dtype=torch.bfloat16
 
         if self.grouped_gemm_runner is None:
             self.grouped_gemm_runner = GroupedGemmRunner(

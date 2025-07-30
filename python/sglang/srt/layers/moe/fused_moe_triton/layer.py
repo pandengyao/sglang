@@ -444,6 +444,10 @@ class FusedMoE(torch.nn.Module):
         enable_ep_moe: Optional[bool] = False,
     ):
         super().__init__()
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+        current_tp_rank = get_tensor_model_parallel_rank()
+        if current_tp_rank == 0:
+            print(f"🔧 [FUSED_MOE] Initializing FusedMoE layer: num_experts={num_experts}, top_k={top_k}, hidden_size={hidden_size}, intermediate_size={intermediate_size}")
 
         if params_dtype is None:
             params_dtype = torch.get_default_dtype()
@@ -519,6 +523,8 @@ class FusedMoE(torch.nn.Module):
         assert self.quant_method is not None
 
         self.quant_config = quant_config
+        if self.tp_rank == 0:
+            print(f"🔧 [FUSED_MOE] Creating weights with quant_method: {self.quant_method.__class__.__name__}")
         self.quant_method.create_weights(
             layer=self,
             num_experts=self.local_num_experts,
@@ -529,6 +535,8 @@ class FusedMoE(torch.nn.Module):
             params_dtype=params_dtype,
             weight_loader=self.weight_loader,
         )
+        if self.tp_rank == 0:
+            print(f"🔧 [FUSED_MOE] FusedMoE layer initialized successfully")
 
     def _load_per_tensor_weight_scale(
         self,
@@ -746,6 +754,8 @@ class FusedMoE(torch.nn.Module):
         shard_id: str,
         expert_id: int,
     ) -> None:
+        if self.tp_rank == 0:
+            print(f"🔧 [FUSED_MOE] Loading weight: {weight_name}, shard_id={shard_id}, expert_id={expert_id}, shape={loaded_weight.shape}")
         expert_id = self._map_global_expert_id_to_local_expert_id(expert_id)
         if expert_id == -1:
             return
@@ -923,6 +933,8 @@ class FusedMoE(torch.nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
         assert self.quant_method is not None
+        if self.tp_rank == 0:
+            print(f"🔧 [FUSED_MOE] Forward pass: input_shape={hidden_states.shape}, router_logits_shape={router_logits.shape}")
 
         # Matrix multiply.
         final_hidden_states = self.quant_method.apply(
@@ -953,8 +965,12 @@ class FusedMoE(torch.nn.Module):
         )
 
         if self.reduce_results and (self.tp_size > 1 or self.ep_size > 1):
+            if self.tp_rank == 0:
+                print(f"🔧 [FUSED_MOE] Performing all_reduce: tp_size={self.tp_size}, ep_size={self.ep_size}")
             final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
 
+        if self.tp_rank == 0:
+            print(f"🔧 [FUSED_MOE] Forward pass completed: output_shape={final_hidden_states.shape}")
         return final_hidden_states
 
     @classmethod
