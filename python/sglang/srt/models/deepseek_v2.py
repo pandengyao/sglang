@@ -2574,6 +2574,7 @@ class DeepseekV2ForCausalLM(nn.Module):
             num_experts=self.config.n_routed_experts + self.num_fused_shared_experts,
         )
         log_info_on_rank0(logger, f"🔧 [DEEPSEEK_V2] Expert params mapping created, num_experts={self.config.n_routed_experts + self.num_fused_shared_experts}")
+        log_info_on_rank0(logger, f"🔧 [DEEPSEEK_V2] len(expert_params_mapping)={len(expert_params_mapping)}")
         log_info_on_rank0(logger, f"🔧 [DEEPSEEK_V2] expert_params_mapping={expert_params_mapping}")
         
         if self.quant_config and self.quant_config.get_name() == "w4afp8":
@@ -2582,6 +2583,7 @@ class DeepseekV2ForCausalLM(nn.Module):
                     num_experts=self.config.n_routed_experts
                 )
             )
+            log_info_on_rank0(logger, f"🔧 [DEEPSEEK_V2] len(expert_params_mapping)={len(expert_params_mapping)}")
             log_info_on_rank0(logger, f"🔧 [DEEPSEEK_V2] Added w4afp8 expert input scale params mapping, expert_params_mapping={expert_params_mapping}")
 
         # Fuse q_a_proj and kv_a_proj_with_mqa along output dimension when q_lora_rank is not None
