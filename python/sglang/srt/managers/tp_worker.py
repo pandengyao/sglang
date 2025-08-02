@@ -69,11 +69,14 @@ class TpModelWorker:
 
         prefix = f" TP{tp_rank}" if server_args.tp_size > 1 else ""
         prefix += f" PP{pp_rank}" if server_args.pp_size > 1 else ""
-        print(f"🔧 [TP_WORKER{prefix}] Initializing tensor parallel worker...")
-        print(f"🔧 [TP_WORKER{prefix}] GPU ID: {gpu_id}, Model: {server_args.model_path}")
+        
+        if tp_rank == 0:
+            print(f"🔧 [TP_WORKER{prefix}] Initializing tensor parallel worker...")
+            print(f"🔧 [TP_WORKER{prefix}] GPU ID: {gpu_id}, Model: {server_args.model_path}")
 
         # Init model and tokenizer
-        print(f"🔧 [TP_WORKER{prefix}] Creating model config...")
+        if tp_rank == 0:
+            print(f"🔧 [TP_WORKER{prefix}] Creating model config...")
         self.model_config = ModelConfig.from_server_args(
             server_args,
             model_path=(
@@ -83,8 +86,11 @@ class TpModelWorker:
             ),
             is_draft_model=is_draft_worker,
         )
+        if tp_rank == 0:
+            print(f"🔧 [TP_WORKER{prefix}] Model config created: {self.model_config}")
 
-        print(f"🔧 [TP_WORKER{prefix}] Creating model runner...")
+        if tp_rank == 0:
+            print(f"🔧 [TP_WORKER{prefix}] Creating model runner...")
         self.model_runner = ModelRunner(
             model_config=self.model_config,
             mem_fraction_static=server_args.mem_fraction_static,
@@ -158,7 +164,8 @@ class TpModelWorker:
         self.worker = self
 
         self.hicache_layer_transfer_counter = None
-        print(f"🔧 [TP_WORKER{prefix}] Tensor parallel worker initialized successfully")
+        if tp_rank == 0:
+            print(f"🔧 [TP_WORKER{prefix}] Tensor parallel worker initialized successfully")
 
     def register_hicache_layer_transfer_counter(self, counter):
         self.hicache_layer_transfer_counter = counter
