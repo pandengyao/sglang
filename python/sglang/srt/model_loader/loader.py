@@ -66,6 +66,7 @@ from sglang.srt.utils import (
     get_device_capability,
     is_npu,
     is_pin_memory_available,
+    log_info_on_rank0,
     set_weight_attrs,
 )
 
@@ -123,15 +124,29 @@ def _get_quantization_config(
     packed_modules_mapping: Dict[str, List[str]],
 ) -> Optional[QuantizationConfig]:
     """Get the quantization config."""
+    log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Starting quantization config resolution")
+    log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Model quantization: {model_config.quantization}")
+    log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Packed modules mapping: {packed_modules_mapping}")
+    
     if model_config.quantization is not None:
+        log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Calling get_quant_config...")
         quant_config = get_quant_config(
             model_config, load_config, packed_modules_mapping
         )
+        log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Raw quant config: {quant_config}")
+        
         # (yizhang2077) workaround for nvidia/Llama-4-Maverick-17B-128E-Eagle3
         if quant_config is None:
+            log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Quant config is None, returning None")
             return None
+            
+        log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Quant config class: {quant_config.__class__.__name__}")
+        log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Quant config name: {getattr(quant_config, 'get_name', lambda: 'N/A')()}")
+        
         if not _is_npu:
+            log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Checking device capability...")
             major, minor = get_device_capability()
+            log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Device capability: major={major}, minor={minor}")
 
             if major is not None and minor is not None:
                 assert 0 <= minor < 10
@@ -143,14 +158,24 @@ def _get_quantization_config(
                         f"Minimum capability: {quant_config.get_min_capability()}. "
                         f"Current capability: {capability}."
                     )
+                log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Device capability check passed")
+        
+        log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Checking supported dtypes...")
         supported_dtypes = quant_config.get_supported_act_dtypes()
+        log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Supported dtypes: {supported_dtypes}")
+        log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Model dtype: {model_config.dtype}")
+        
         if model_config.dtype not in supported_dtypes:
             raise ValueError(
                 f"{model_config.dtype} is not supported for quantization "
                 f"method {model_config.quantization}. Supported dtypes: "
                 f"{supported_dtypes}"
             )
+        log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Dtype check passed")
+        log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] Returning quant config: {quant_config}")
         return quant_config
+    
+    log_info_on_rank0(logger, f"[GET_QUANT_CONFIG] No quantization specified, returning None")
     return None
 
 
@@ -159,22 +184,51 @@ def _initialize_model(
     load_config: LoadConfig,
 ) -> nn.Module:
     """Initialize a model with the given configurations."""
-    model_class, _ = get_model_architecture(model_config)
+    log_info_on_rank0(logger, f"[INIT_MODEL] Starting model initialization")
+    log_info_on_rank0(logger, f"[INIT_MODEL] Model config path: {model_config.model_path}")
+    log_info_on_rank0(logger, f"[INIT_MODEL] Model config architectures: {model_config.hf_config.architectures}")
+    log_info_on_rank0(logger, f"[INIT_MODEL] Model config model_type: {model_config.hf_config.model_type}")
+    log_info_on_rank0(logger, f"[INIT_MODEL] Load config format: {load_config.load_format}")
+    
+    log_info_on_rank0(logger, f"[INIT_MODEL] Calling get_model_architecture...")
+    model_class, architecture_name = get_model_architecture(model_config)
+    log_info_on_rank0(logger, f"[INIT_MODEL] Resolved model class: {model_class.__name__}")
+    log_info_on_rank0(logger, f"[INIT_MODEL] Architecture name: {architecture_name}")
+    log_info_on_rank0(logger, f"[INIT_MODEL] Model class module: {model_class.__module__}")
+    
     packed_modules_mapping = getattr(model_class, "packed_modules_mapping", {})
+    log_info_on_rank0(logger, f"[INIT_MODEL] Packed modules mapping: {packed_modules_mapping}")
+    
     if _is_npu:
+        log_info_on_rank0(logger, f"[INIT_MODEL] NPU detected, updating packed_modules_mapping")
         packed_modules_mapping["fused_qkv_a_proj_with_mqa"] = [
             "q_a_proj",
             "kv_a_proj_with_mqa",
         ]
         packed_modules_mapping["qkv_proj"] = ["q_proj", "k_proj", "v_proj"]
         packed_modules_mapping["gate_up_proj"] = ["gate_proj", "up_proj"]
+        log_info_on_rank0(logger, f"[INIT_MODEL] Updated packed_modules_mapping: {packed_modules_mapping}")
+    
+    log_info_on_rank0(logger, f"[INIT_MODEL] Calling _get_quantization_config...")
     quant_config = _get_quantization_config(
         model_config, load_config, packed_modules_mapping
     )
-    return model_class(
+    log_info_on_rank0(logger, f"[INIT_MODEL] Quantization config: {quant_config}")
+    if quant_config:
+        log_info_on_rank0(logger, f"[INIT_MODEL] Quantization config class: {quant_config.__class__.__name__}")
+        log_info_on_rank0(logger, f"[INIT_MODEL] Quantization config name: {getattr(quant_config, 'get_name', lambda: 'N/A')()}")
+    
+    log_info_on_rank0(logger, f"[INIT_MODEL] Creating model instance...")
+    log_info_on_rank0(logger, f"[INIT_MODEL] Model class: {model_class}")
+    log_info_on_rank0(logger, f"[INIT_MODEL] HF config: {model_config.hf_config}")
+    log_info_on_rank0(logger, f"[INIT_MODEL] Quant config: {quant_config}")
+    
+    model_instance = model_class(
         config=model_config.hf_config,
         quant_config=quant_config,
     )
+    
+    return model_instance
 
 
 class BaseModelLoader(ABC):
@@ -357,6 +411,8 @@ class DefaultModelLoader(BaseModelLoader):
         hf_folder, hf_weights_files, use_safetensors = self._prepare_weights(
             source.model_or_path, source.revision, source.fall_back_to_pt
         )
+        log_info_on_rank0(logger, f"[MODEL_LOADER] hf_weights_files: {hf_weights_files}")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] use_safetensors: {use_safetensors}")
         if self.load_config.load_format == LoadFormat.NPCACHE:
             # Currently np_cache only support *.bin checkpoints
             assert use_safetensors is False
@@ -367,6 +423,7 @@ class DefaultModelLoader(BaseModelLoader):
                 hf_weights_files,
             )
         elif use_safetensors:
+            log_info_on_rank0(logger, f"[MODEL_LOADER] Using safetensors loading")
             from sglang.srt.managers.schedule_batch import global_server_args_dict
 
             weight_loader_disable_mmap = global_server_args_dict.get(
@@ -374,6 +431,7 @@ class DefaultModelLoader(BaseModelLoader):
             )
 
             if extra_config.get("enable_multithread_load"):
+                log_info_on_rank0(logger, f"[MODEL_LOADER] Using multi-threaded safetensors loading with {extra_config.get('num_threads', self.DEFAULT_NUM_THREADS)} threads")
                 weights_iterator = multi_thread_safetensors_weights_iterator(
                     hf_weights_files,
                     max_workers=extra_config.get(
@@ -382,9 +440,11 @@ class DefaultModelLoader(BaseModelLoader):
                     disable_mmap=weight_loader_disable_mmap,
                 )
             else:
+                log_info_on_rank0(logger, f"[MODEL_LOADER] Using single-threaded safetensors loading")
                 weights_iterator = safetensors_weights_iterator(
                     hf_weights_files, disable_mmap=weight_loader_disable_mmap
                 )
+                log_info_on_rank0(logger, f"[MODEL_LOADER] weights_iterator: {weights_iterator}")
 
         else:
             if extra_config.get("enable_multithread_load"):
@@ -407,11 +467,13 @@ class DefaultModelLoader(BaseModelLoader):
     ) -> Generator[Tuple[str, torch.Tensor], None, None]:
 
         primary_weights = DefaultModelLoader.Source.init_new(model_config, model)
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Primary weights: {primary_weights}")
         yield from self._get_weights_iterator(primary_weights)
 
         secondary_weights = cast(
             Iterable[DefaultModelLoader.Source], getattr(model, "secondary_weights", ())
         )
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Secondary weights: {secondary_weights}")
         for source in secondary_weights:
             yield from self._get_weights_iterator(source)
 
@@ -426,35 +488,37 @@ class DefaultModelLoader(BaseModelLoader):
         model_config: ModelConfig,
         device_config: DeviceConfig,
     ) -> nn.Module:
-        print(f"📦 [MODEL_LOADER] Starting model loading with format: {self.load_config.load_format}")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Starting model loading with format: {self.load_config.load_format}")
         target_device = torch.device(device_config.device)
         with set_default_torch_dtype(model_config.dtype):
             with target_device:
-                print(f"📦 [MODEL_LOADER] Initializing model architecture...")
+                log_info_on_rank0(logger, f"[MODEL_LOADER] Initializing model architecture...")
                 model = _initialize_model(
                     model_config,
                     self.load_config,
                 )
-                print(f"📦 [MODEL_LOADER] Model architecture initialized: {type(model).__name__}")
+                log_info_on_rank0(logger, f"[MODEL_LOADER] Model architecture initialized: {type(model).__name__}")
+                log_info_on_rank0(logger, f"[MODEL_LOADER] Model:\n {model}")
 
-        print(f"📦 [MODEL_LOADER] Loading weights from {model_config.model_path}...")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Loading weights from {model_config.model_path}...")
         self.load_weights_and_postprocess(
             model, self._get_all_weights(model_config, model), target_device
         )
-        print(f"📦 [MODEL_LOADER] Weights loaded and post-processed successfully")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Weights loaded and post-processed successfully")
 
         return model.eval()
 
     @staticmethod
     def load_weights_and_postprocess(model, weights, target_device):
-        print(f"📦 [MODEL_LOADER] Loading weights into model...")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Loading weights into model...")
         model.load_weights(weights)
-        print(f"📦 [MODEL_LOADER] Weights loaded, starting post-processing...")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Weights loaded, starting post-processing...")
 
-        for _, module in model.named_modules():
+        for name, module in model.named_modules():
             quant_method = getattr(module, "quant_method", None)
             if quant_method is not None:
-                print(f"📦 [MODEL_LOADER] Processing quantization method for module: {type(module).__name__}")
+                log_info_on_rank0(logger, f"[MODEL_LOADER] Quant method name: {name}, type: {type(module).__name__}")
+                log_info_on_rank0(logger, f"[MODEL_LOADER] Quant method object: {quant_method}")
                 # When quant methods need to process weights after loading
                 # (for repacking, quantizing, etc), they expect parameters
                 # to be on the global target device. This scope is for the
@@ -462,7 +526,7 @@ class DefaultModelLoader(BaseModelLoader):
                 # parameters onto device for processing and back off after.
                 with device_loading_context(module, target_device):
                     quant_method.process_weights_after_loading(module)
-        print(f"📦 [MODEL_LOADER] Post-processing completed")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Post-processing completed")
 
 
 class LayeredModelLoader(DefaultModelLoader):
@@ -1528,38 +1592,38 @@ def load_model_with_cpu_quantization(
 def get_model_loader(load_config: LoadConfig) -> BaseModelLoader:
     """Get a model loader based on the load format."""
     
-    print(f"🔍 [MODEL_LOADER] Starting model loader selection")
-    print(f"🔍 [MODEL_LOADER] Load format: {load_config.load_format}")
-    print(f"🔍 [MODEL_LOADER] Load format type: {type(load_config.load_format)}")
+    log_info_on_rank0(logger, f"[MODEL_LOADER] Starting model loader selection")
+    log_info_on_rank0(logger, f"[MODEL_LOADER] Load format: {load_config.load_format}")
+    log_info_on_rank0(logger, f"[MODEL_LOADER] Load format type: {type(load_config.load_format)}")
 
     if isinstance(load_config.load_format, type):
-        print(f"🔍 [MODEL_LOADER] Branch: Custom class loader (load_format is a type)")
-        print(f"🔍 [MODEL_LOADER] Creating custom loader: {load_config.load_format.__name__}")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Branch: Custom class loader (load_format is a type)")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Creating custom loader: {load_config.load_format.__name__}")
         return load_config.load_format(load_config)
 
     if load_config.load_format == LoadFormat.DUMMY:
-        print(f"🔍 [MODEL_LOADER] Branch: DUMMY loader selected")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Branch: DUMMY loader selected")
         return DummyModelLoader(load_config)
 
     if load_config.load_format == LoadFormat.SHARDED_STATE:
-        print(f"🔍 [MODEL_LOADER] Branch: SHARDED_STATE loader selected")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Branch: SHARDED_STATE loader selected")
         return ShardedStateLoader(load_config)
 
     if load_config.load_format == LoadFormat.BITSANDBYTES:
-        print(f"🔍 [MODEL_LOADER] Branch: BITSANDBYTES loader selected")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Branch: BITSANDBYTES loader selected")
         return BitsAndBytesModelLoader(load_config)
 
     if load_config.load_format == LoadFormat.GGUF:
-        print(f"🔍 [MODEL_LOADER] Branch: GGUF loader selected")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Branch: GGUF loader selected")
         return GGUFModelLoader(load_config)
 
     if load_config.load_format == LoadFormat.LAYERED:
-        print(f"🔍 [MODEL_LOADER] Branch: LAYERED loader selected")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Branch: LAYERED loader selected")
         return LayeredModelLoader(load_config)
 
     if load_config.load_format == LoadFormat.REMOTE:
-        print(f"🔍 [MODEL_LOADER] Branch: REMOTE loader selected")
+        log_info_on_rank0(logger, f"[MODEL_LOADER] Branch: REMOTE loader selected")
         return RemoteModelLoader(load_config)
 
-    print(f"🔍 [MODEL_LOADER] Branch: DEFAULT loader selected (fallback)")
+    log_info_on_rank0(logger, f"[MODEL_LOADER] Branch: DEFAULT loader selected (fallback)")
     return DefaultModelLoader(load_config)

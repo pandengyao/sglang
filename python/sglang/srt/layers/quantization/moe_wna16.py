@@ -32,6 +32,20 @@ class MoeWNA16Config(QuantizationConfig):
         modules_to_not_convert: Optional[List[str]],
         full_config: Dict[str, Any],
     ) -> None:
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] Initializing MoeWNA16Config")
+                print(f"🔧 [MOE_WNA16_CONFIG] Parameters:")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - linear_quant_method: {linear_quant_method}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - weight_bits: {weight_bits}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - group_size: {group_size}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - has_zp: {has_zp}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - lm_head_quantized: {lm_head_quantized}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - modules_to_not_convert: {modules_to_not_convert}")
+        except:
+            pass
+        
         super().__init__()
         self.weight_bits = weight_bits
         self.group_size = group_size
@@ -45,6 +59,12 @@ class MoeWNA16Config(QuantizationConfig):
 
         if self.linear_quant_method == "gptq":
             self.use_marlin = GPTQMarlinConfig.is_gptq_marlin_compatible(full_config)
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] GPTQ method - use_marlin: {self.use_marlin}")
+            except:
+                pass
         elif self.linear_quant_method == "awq":
             capability_tuple = get_device_capability()
             device_capability = (
@@ -53,6 +73,12 @@ class MoeWNA16Config(QuantizationConfig):
                 else capability_tuple[0] * 10 + capability_tuple[1]
             )
             awq_min_capability = AWQConfig.get_min_capability()
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] AWQ method - device_capability: {device_capability}, min_capability: {awq_min_capability}")
+            except:
+                pass
             if device_capability < awq_min_capability:
                 raise ValueError(
                     "The quantization method moe_wna16 + awq is not supported "
@@ -67,6 +93,17 @@ class MoeWNA16Config(QuantizationConfig):
             self.modules_to_not_convert = []
         else:
             self.modules_to_not_convert = modules_to_not_convert
+        
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] MoeWNA16Config initialized successfully")
+                print(f"🔧 [MOE_WNA16_CONFIG] Final config:")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - bit8_pack_factor: {self.bit8_pack_factor}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - use_marlin: {self.use_marlin}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - modules_to_not_convert count: {len(self.modules_to_not_convert)}")
+        except:
+            pass
 
     @classmethod
     def get_name(cls) -> str:
@@ -89,21 +126,60 @@ class MoeWNA16Config(QuantizationConfig):
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "MoeWNA16Config":
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] Creating config from config dict")
+                print(f"🔧 [MOE_WNA16_CONFIG] Config keys: {list(config.keys())}")
+        except:
+            pass
+        
         quant_method = cls.get_from_keys(config, ["quant_method"])
         weight_bits = cls.get_from_keys(config, ["bits"])
         group_size = cls.get_from_keys(config, ["group_size"])
         lm_head_quantized = cls.get_from_keys_or(config, ["lm_head"], default=False)
+        
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] Extracted parameters:")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - quant_method: {quant_method}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - weight_bits: {weight_bits}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - group_size: {group_size}")
+                print(f"🔧 [MOE_WNA16_CONFIG]   - lm_head_quantized: {lm_head_quantized}")
+        except:
+            pass
+        
         if quant_method == "gptq":
             has_zp = not cls.get_from_keys(config, ["sym"])
             modules_to_not_convert = []
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] GPTQ config - has_zp: {has_zp}")
+            except:
+                pass
         elif quant_method == "awq":
             has_zp = cls.get_from_keys(config, ["zero_point"])
             modules_to_not_convert = cls.get_from_keys_or(
                 config, ["modules_to_not_convert"], None
             )
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] AWQ config - has_zp: {has_zp}, modules_to_not_convert: {modules_to_not_convert}")
+            except:
+                pass
         else:
             raise ValueError("moe_wna16 only support gptq and awq.")
 
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] Creating MoeWNA16Config instance")
+        except:
+            pass
+        
         return cls(
             quant_method,
             weight_bits,
@@ -148,30 +224,80 @@ class MoeWNA16Config(QuantizationConfig):
     def get_quant_method(
         self, layer: torch.nn.Module, prefix: str
     ) -> Optional["QuantizeMethodBase"]:
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] Getting quant method for layer: {type(layer).__name__}, prefix: {prefix}")
+        except:
+            pass
+        
         # avoid circular import
         from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 
         if is_layer_skipped_quant(prefix, self.modules_to_not_convert):
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] Layer skipped for quantization - returning UnquantizedLinearMethod")
+            except:
+                pass
             return UnquantizedLinearMethod()
         elif isinstance(layer, LinearBase):
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] LinearBase layer detected - using {self.linear_quant_method} method")
+            except:
+                pass
 
             if self.linear_quant_method == "gptq":
                 if self.use_marlin:
+                    try:
+                        current_tp_rank = get_tensor_model_parallel_rank()
+                        if current_tp_rank == 0:
+                            print(f"🔧 [MOE_WNA16_CONFIG] Using GPTQ Marlin method")
+                    except:
+                        pass
                     return GPTQMarlinConfig.from_config(
                         self.full_config
                     ).get_quant_method(layer, prefix)
                 else:
+                    try:
+                        current_tp_rank = get_tensor_model_parallel_rank()
+                        if current_tp_rank == 0:
+                            print(f"🔧 [MOE_WNA16_CONFIG] Using GPTQ method")
+                    except:
+                        pass
                     return GPTQConfig.from_config(self.full_config).get_quant_method(
                         layer, prefix
                     )
             elif self.linear_quant_method == "awq":
+                try:
+                    current_tp_rank = get_tensor_model_parallel_rank()
+                    if current_tp_rank == 0:
+                        print(f"🔧 [MOE_WNA16_CONFIG] Using AWQ method")
+                except:
+                    pass
                 return AWQConfig.from_config(self.full_config).get_quant_method(
                     layer, prefix
                 )
             else:
                 raise ValueError("moe_wna16 only support gptq and awq.")
         elif isinstance(layer, FusedMoE):
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16_CONFIG] FusedMoE layer detected - returning MoeWNA16Method")
+            except:
+                pass
             return MoeWNA16Method(self)
+        
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16_CONFIG] No matching quant method found - returning None")
+        except:
+            pass
         return None
 
 
@@ -190,19 +316,60 @@ class MoeWNA16Method:
         # avoid circular import
         from sglang.srt.layers.moe.fused_moe_triton import FusedMoEMethodBase
 
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16] Creating MoeWNA16Method instance with dynamic inheritance from FusedMoEMethodBase")
+        except:
+            pass
+
         if not hasattr(cls, "_initialized"):
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16] First time initialization - creating dynamic class composition")
+            except:
+                pass
+            # 保存原始的 __init__ 方法
             original_init = cls.__init__
+            
+            # 动态创建新类，继承自 FusedMoEMethodBase
             new_cls = type(
                 cls.__name__,
-                (FusedMoEMethodBase,),
+                (FusedMoEMethodBase,),  # 父类
                 {
-                    "__init__": original_init,
-                    **{k: v for k, v in cls.__dict__.items() if k != "__dict__"},
+                    "__init__": original_init,  # 保持原始初始化方法
+                    **{k: v for k, v in cls.__dict__.items() if k != "__dict__"},  # 复制其他方法
                 },
             )
+            
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16] Dynamic class created: {new_cls.__name__} inheriting from {FusedMoEMethodBase.__name__}")
+            except:
+                pass
+            
+            # 创建新类的实例并初始化
             obj = super(new_cls, new_cls).__new__(new_cls)
             obj.__init__(*args, **kwargs)
+            
+            try:
+                current_tp_rank = get_tensor_model_parallel_rank()
+                if current_tp_rank == 0:
+                    print(f"🔧 [MOE_WNA16] MoeWNA16Method instance created successfully with quant_config: {args[0].__class__.__name__ if args else 'None'}")
+            except:
+                pass
+            
             return obj
+        
+        # 如果已经初始化过，使用正常的实例化流程
+        try:
+            current_tp_rank = get_tensor_model_parallel_rank()
+            if current_tp_rank == 0:
+                print(f"🔧 [MOE_WNA16] Using cached initialization - class already composed")
+        except:
+            pass
         return super().__new__(cls)
 
     def __init__(self, quant_config: MoeWNA16Config):
@@ -217,12 +384,31 @@ class MoeWNA16Method:
         params_dtype: torch.dtype,
         **extra_weight_attrs,
     ):
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+        tp_rank = get_tensor_model_parallel_rank()
+        
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE_CREATE] Starting weight creation for {type(layer).__name__}")
+            print(f"🔧 [WNA16_MOE_CREATE] Parameters:")
+            print(f"🔧 [WNA16_MOE_CREATE]   - num_experts: {num_experts}")
+            print(f"🔧 [WNA16_MOE_CREATE]   - hidden_size: {hidden_size}")
+            print(f"🔧 [WNA16_MOE_CREATE]   - intermediate_size_per_partition: {intermediate_size_per_partition}")
+            print(f"🔧 [WNA16_MOE_CREATE]   - params_dtype: {params_dtype}")
+            print(f"🔧 [WNA16_MOE_CREATE]   - extra_weight_attrs keys: {list(extra_weight_attrs.keys())}")
+        
         from sglang.srt.layers.moe.fused_moe_triton import FusedMoeWeightScaleSupported
 
         layer.quant_config = self.quant_config
         bit8_pack_factor = self.quant_config.bit8_pack_factor
         group_size = self.quant_config.group_size
         group_size_div_factor = 1
+
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE_CREATE] Quantization config:")
+            print(f"🔧 [WNA16_MOE_CREATE]   - bit8_pack_factor: {bit8_pack_factor}")
+            print(f"🔧 [WNA16_MOE_CREATE]   - group_size: {group_size}")
+            print(f"🔧 [WNA16_MOE_CREATE]   - weight_bits: {self.quant_config.weight_bits}")
+            print(f"🔧 [WNA16_MOE_CREATE]   - has_zp: {self.quant_config.has_zp}")
 
         # make intermediate_size and hidden_size diviable by group_size
         # we reduce the group size to ensure that
@@ -234,6 +420,11 @@ class MoeWNA16Method:
         layer.group_size = group_size
         layer.group_size_div_factor = group_size_div_factor
 
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE_CREATE] Adjusted group size:")
+            print(f"🔧 [WNA16_MOE_CREATE]   - final group_size: {group_size}")
+            print(f"🔧 [WNA16_MOE_CREATE]   - group_size_div_factor: {group_size_div_factor}")
+
         strategy = FusedMoeWeightScaleSupported.GROUP.value
         extra_weight_attrs.update({"quant_method": strategy, "is_transposed": False})
 
@@ -242,6 +433,8 @@ class MoeWNA16Method:
         wrapped_weight_loader = MoeWNA16Method.get_weight_loader(layer, weight_loader)
         extra_weight_attrs["weight_loader"] = wrapped_weight_loader
 
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE_CREATE] Creating w13_qweight parameter")
         # Fused gate_up_proj (column parallel)
         w13_qweight = torch.nn.Parameter(
             torch.empty(
@@ -254,8 +447,12 @@ class MoeWNA16Method:
         )
         layer.register_parameter("w13_qweight", w13_qweight)
         set_weight_attrs(w13_qweight, extra_weight_attrs)
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE_CREATE] w13_qweight shape: {w13_qweight.shape}")
 
-        # down_proj (row parallel)
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE_CREATE] Creating w2_qweight parameter")
+        # Fused down_proj (row parallel)
         w2_qweight = torch.nn.Parameter(
             torch.empty(
                 num_experts,
@@ -267,7 +464,11 @@ class MoeWNA16Method:
         )
         layer.register_parameter("w2_qweight", w2_qweight)
         set_weight_attrs(w2_qweight, extra_weight_attrs)
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE_CREATE] w2_qweight shape: {w2_qweight.shape}")
 
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE_CREATE] Creating w13_scales parameter")
         w13_scales = torch.nn.Parameter(
             torch.zeros(
                 num_experts,
@@ -279,7 +480,11 @@ class MoeWNA16Method:
         )
         layer.register_parameter("w13_scales", w13_scales)
         set_weight_attrs(w13_scales, extra_weight_attrs)
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE_CREATE] w13_scales shape: {w13_scales.shape}")
 
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE_CREATE] Creating w2_scales parameter")
         w2_scales = torch.nn.Parameter(
             torch.zeros(
                 num_experts,
@@ -291,8 +496,13 @@ class MoeWNA16Method:
         )
         layer.register_parameter("w2_scales", w2_scales)
         set_weight_attrs(w2_scales, extra_weight_attrs)
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE_CREATE] w2_scales shape: {w2_scales.shape}")
 
         if self.quant_config.has_zp:
+            if tp_rank == 0:
+                print(f"🔧 [WNA16_MOE_CREATE] Creating zero point parameters (has_zp=True)")
+                print(f"🔧 [WNA16_MOE_CREATE] Creating w13_qzeros parameter")
             w13_qzeros = torch.nn.Parameter(
                 torch.zeros(
                     num_experts,
@@ -304,7 +514,11 @@ class MoeWNA16Method:
             )
             layer.register_parameter("w13_qzeros", w13_qzeros)
             set_weight_attrs(w13_qzeros, extra_weight_attrs)
+            if tp_rank == 0:
+                print(f"🔧 [WNA16_MOE_CREATE] w13_qzeros shape: {w13_qzeros.shape}")
 
+            if tp_rank == 0:
+                print(f"🔧 [WNA16_MOE_CREATE] Creating w2_qzeros parameter")
             w2_qzeros = torch.nn.Parameter(
                 torch.zeros(
                     num_experts,
@@ -316,19 +530,34 @@ class MoeWNA16Method:
             )
             layer.register_parameter("w2_qzeros", w2_qzeros)
             set_weight_attrs(w2_qzeros, extra_weight_attrs)
+            if tp_rank == 0:
+                print(f"🔧 [WNA16_MOE_CREATE] w2_qzeros shape: {w2_qzeros.shape}")
+        else:
+            if tp_rank == 0:
+                print(f"🔧 [WNA16_MOE_CREATE] Skipping zero point parameters (has_zp=False)")
 
         if self.quant_config.linear_quant_method == "gptq":
+            if tp_rank == 0:
+                print(f"🔧 [WNA16_MOE_CREATE] Creating GPTQ-specific parameters")
             # some param are unused, but we need to init them in order to
             # load weights
             invalid_param_keys = ["w13_g_idx", "w2_g_idx"]
             if not self.quant_config.has_zp:
                 invalid_param_keys += ["w13_qzeros", "w2_qzeros"]
             for key in invalid_param_keys:
+                if tp_rank == 0:
+                    print(f"🔧 [WNA16_MOE_CREATE] Creating dummy parameter: {key}")
                 param = torch.nn.Parameter(
                     torch.empty((0,), dtype=torch.int32), requires_grad=False
                 )
                 layer.register_parameter(key, param)
                 set_weight_attrs(param, extra_weight_attrs)
+        else:
+            if tp_rank == 0:
+                print(f"🔧 [WNA16_MOE_CREATE] Linear quant method: {self.quant_config.linear_quant_method}")
+
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE_CREATE] Weight creation completed for {type(layer).__name__}")
 
     def apply(
         self,
@@ -352,14 +581,18 @@ class MoeWNA16Method:
         # avoid circular import
         from sglang.srt.layers.moe.fused_moe_triton.fused_moe import fused_experts
         from sglang.srt.layers.moe.topk import select_experts
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+        
+        tp_rank = get_tensor_model_parallel_rank()
 
-        print(f"🔧 [WNA16_MOE] Starting WNA16 MoE inference")
-        print(f"🔧 [WNA16_MOE] Input shape: {x.shape}, dtype: {x.dtype}")
-        print(f"🔧 [WNA16_MOE] Router logits shape: {router_logits.shape}")
-        print(f"🔧 [WNA16_MOE] Top-k: {top_k}, activation: {activation}")
-        print(f"🔧 [WNA16_MOE] Weight bits: {self.quant_config.weight_bits}")
-        print(f"🔧 [WNA16_MOE] Has zero points: {self.quant_config.has_zp}")
-        print(f"🔧 [WNA16_MOE] Linear quant method: {self.quant_config.linear_quant_method}")
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE] Starting WNA16 MoE inference")
+            print(f"🔧 [WNA16_MOE] Input shape: {x.shape}, dtype: {x.dtype}")
+            print(f"🔧 [WNA16_MOE] Router logits shape: {router_logits.shape}")
+            print(f"🔧 [WNA16_MOE] Top-k: {top_k}, activation: {activation}")
+            print(f"🔧 [WNA16_MOE] Weight bits: {self.quant_config.weight_bits}")
+            print(f"🔧 [WNA16_MOE] Has zero points: {self.quant_config.has_zp}")
+            print(f"🔧 [WNA16_MOE] Linear quant method: {self.quant_config.linear_quant_method}")
 
         assert activation == "silu", "Only SiLU activation is supported."
         topk_weights, topk_ids = select_experts(
@@ -376,25 +609,27 @@ class MoeWNA16Method:
             routed_scaling_factor=routed_scaling_factor,
         )
 
-        print(f"🔧 [WNA16_MOE] Expert selection completed")
-        print(f"🔧 [WNA16_MOE] Top-k weights shape: {topk_weights.shape}")
-        print(f"🔧 [WNA16_MOE] Top-k IDs shape: {topk_ids.shape}")
-        print(f"🔧 [WNA16_MOE] W13 qweight shape: {layer.w13_qweight.shape}")
-        print(f"🔧 [WNA16_MOE] W2 qweight shape: {layer.w2_qweight.shape}")
-        print(f"🔧 [WNA16_MOE] W13 scales shape: {layer.w13_scales.shape}")
-        print(f"🔧 [WNA16_MOE] W2 scales shape: {layer.w2_scales.shape}")
-        if self.quant_config.has_zp:
-            print(f"🔧 [WNA16_MOE] W13 qzeros shape: {layer.w13_qzeros.shape}")
-            print(f"🔧 [WNA16_MOE] W2 qzeros shape: {layer.w2_qzeros.shape}")
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE] Expert selection completed")
+            print(f"🔧 [WNA16_MOE] Top-k weights shape: {topk_weights.shape}")
+            print(f"🔧 [WNA16_MOE] Top-k IDs shape: {topk_ids.shape}")
+            print(f"🔧 [WNA16_MOE] W13 qweight shape: {layer.w13_qweight.shape}")
+            print(f"🔧 [WNA16_MOE] W2 qweight shape: {layer.w2_qweight.shape}")
+            print(f"🔧 [WNA16_MOE] W13 scales shape: {layer.w13_scales.shape}")
+            print(f"🔧 [WNA16_MOE] W2 scales shape: {layer.w2_scales.shape}")
+            if self.quant_config.has_zp:
+                print(f"🔧 [WNA16_MOE] W13 qzeros shape: {layer.w13_qzeros.shape}")
+                print(f"🔧 [WNA16_MOE] W2 qzeros shape: {layer.w2_qzeros.shape}")
 
         weight_bits = self.quant_config.weight_bits
         has_zp = self.quant_config.has_zp
 
-        print(f"🔧 [WNA16_MOE] Calling fused_experts with dequantization parameters:")
-        print(f"🔧 [WNA16_MOE]   - use_int4_w4a16: {weight_bits == 4}")
-        print(f"🔧 [WNA16_MOE]   - use_int8_w8a16: {weight_bits == 8}")
-        print(f"🔧 [WNA16_MOE]   - block_shape: [0, {layer.group_size}]")
-        print(f"🔧 [WNA16_MOE]   - has_zp: {has_zp}")
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE] Calling fused_experts with dequantization parameters:")
+            print(f"🔧 [WNA16_MOE]   - use_int4_w4a16: {weight_bits == 4}")
+            print(f"🔧 [WNA16_MOE]   - use_int8_w8a16: {weight_bits == 8}")
+            print(f"🔧 [WNA16_MOE]   - block_shape: [0, {layer.group_size}]")
+            print(f"🔧 [WNA16_MOE]   - has_zp: {has_zp}")
 
         result = fused_experts(
             x,
@@ -415,7 +650,8 @@ class MoeWNA16Method:
             routed_scaling_factor=routed_scaling_factor,
         )
 
-        print(f"🔧 [WNA16_MOE] Fused experts completed, output shape: {result.shape}")
+        if tp_rank == 0:
+            print(f"🔧 [WNA16_MOE] Fused experts completed, output shape: {result.shape}")
         return result
 
     @staticmethod
@@ -474,15 +710,21 @@ class MoeWNA16Method:
             shard_id: str,
             expert_id: int,
         ):
-            print(f"🔧 [WNA16_MOE_LOADER] Loading weight: {weight_name}")
-            print(f"🔧 [WNA16_MOE_LOADER] Shard ID: {shard_id}, Expert ID: {expert_id}")
-            print(f"🔧 [WNA16_MOE_LOADER] Loaded weight shape: {loaded_weight.shape}, dtype: {loaded_weight.dtype}")
+            from sglang.srt.distributed import get_tensor_model_parallel_rank
+            tp_rank = get_tensor_model_parallel_rank()
+            
+            if tp_rank == 0:
+                print(f"🔧 [WNA16_MOE_LOADER] Loading weight: {weight_name}")
+                print(f"🔧 [WNA16_MOE_LOADER] Shard ID: {shard_id}, Expert ID: {expert_id}")
+                print(f"🔧 [WNA16_MOE_LOADER] Loaded weight shape: {loaded_weight.shape}, dtype: {loaded_weight.dtype}")
             
             if "g_idx" in weight_name:
-                print(f"🔧 [WNA16_MOE_LOADER] Skipping g_idx parameter")
+                if tp_rank == 0:
+                    print(f"🔧 [WNA16_MOE_LOADER] Skipping g_idx parameter")
                 return
             if not layer.quant_config.has_zp and "qzeros" in weight_name:
-                print(f"🔧 [WNA16_MOE_LOADER] Skipping qzeros parameter (no zero points)")
+                if tp_rank == 0:
+                    print(f"🔧 [WNA16_MOE_LOADER] Skipping qzeros parameter (no zero points)")
                 return
 
             device = get_tp_group().device
@@ -490,43 +732,55 @@ class MoeWNA16Method:
             loaded_weight = loaded_weight.to(device)
             shard_size = layer.intermediate_size_per_partition
 
-            print(f"🔧 [WNA16_MOE_LOADER] Converting weight for method: {layer.quant_config.linear_quant_method}")
-            print(f"🔧 [WNA16_MOE_LOADER] Weight bits: {layer.quant_config.weight_bits}")
+            if tp_rank == 0:
+                print(f"🔧 [WNA16_MOE_LOADER] Converting weight for method: {layer.quant_config.linear_quant_method}")
+                print(f"🔧 [WNA16_MOE_LOADER] Weight bits: {layer.quant_config.weight_bits}")
 
             # convert gptq and awq weight to a standard format
             if layer.quant_config.linear_quant_method == "awq":
                 assert layer.quant_config.weight_bits == 4
-                print(f"🔧 [WNA16_MOE_LOADER] Converting AWQ tensor")
+                if tp_rank == 0:
+                    print(f"🔧 [WNA16_MOE_LOADER] Converting AWQ tensor")
                 if "weight" in weight_name:
-                    print(f"🔧 [WNA16_MOE_LOADER] Converting AWQ qweight")
+                    if tp_rank == 0:
+                        print(f"🔧 [WNA16_MOE_LOADER] Converting AWQ qweight")
                     loaded_weight = convert_awq_tensor(loaded_weight, "qweight")
                 elif "zeros" in weight_name:
-                    print(f"🔧 [WNA16_MOE_LOADER] Converting AWQ qzeros")
+                    if tp_rank == 0:
+                        print(f"🔧 [WNA16_MOE_LOADER] Converting AWQ qzeros")
                     loaded_weight = convert_awq_tensor(loaded_weight, "qzeros")
                 else:
-                    print(f"🔧 [WNA16_MOE_LOADER] Transposing non-weight/zeros tensor")
+                    if tp_rank == 0:
+                        print(f"🔧 [WNA16_MOE_LOADER] Transposing non-weight/zeros tensor")
                     loaded_weight = loaded_weight.T
             elif layer.quant_config.linear_quant_method == "gptq":
                 assert layer.quant_config.weight_bits in [4, 8]
-                print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ tensor")
+                if tp_rank == 0:
+                    print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ tensor")
                 if "weight" in weight_name:
-                    print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ qweight")
+                    if tp_rank == 0:
+                        print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ qweight")
                     loaded_weight = loaded_weight.T.contiguous().view(torch.uint8)
                 elif "zeros" in weight_name:
-                    print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ qzeros")
+                    if tp_rank == 0:
+                        print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ qzeros")
                     # add 1 to gptq qzeros to align with awq
                     loaded_weight = loaded_weight.view(torch.uint8)
                     if layer.quant_config.weight_bits == 4:
-                        print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ int4 qzeros")
+                        if tp_rank == 0:
+                            print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ int4 qzeros")
                         loaded_weight = convert_gptq_int4_qzeros(loaded_weight).T
                     else:
-                        print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ int8 qzeros")
+                        if tp_rank == 0:
+                            print(f"🔧 [WNA16_MOE_LOADER] Converting GPTQ int8 qzeros")
                         loaded_weight = loaded_weight.T + 1
                 else:
-                    print(f"🔧 [WNA16_MOE_LOADER] Transposing non-weight/zeros tensor")
+                    if tp_rank == 0:
+                        print(f"🔧 [WNA16_MOE_LOADER] Transposing non-weight/zeros tensor")
                     loaded_weight = loaded_weight.T
 
-            print(f"🔧 [WNA16_MOE_LOADER] After conversion shape: {loaded_weight.shape}")
+            if tp_rank == 0:
+                print(f"🔧 [WNA16_MOE_LOADER] After conversion shape: {loaded_weight.shape}")
 
             # repeat the qzeros/scales to fit new group size
             if (
@@ -534,33 +788,41 @@ class MoeWNA16Method:
                 and "qzeros" in weight_name
                 or "scales" in weight_name
             ):
-                print(f"🔧 [WNA16_MOE_LOADER] Repeating tensor for group size adjustment")
-                print(f"🔧 [WNA16_MOE_LOADER] Group size div factor: {layer.group_size_div_factor}")
+                if tp_rank == 0:
+                    print(f"🔧 [WNA16_MOE_LOADER] Repeating tensor for group size adjustment")
+                    print(f"🔧 [WNA16_MOE_LOADER] Group size div factor: {layer.group_size_div_factor}")
                 loaded_weight = loaded_weight.repeat_interleave(
                     layer.group_size_div_factor, 1
                 )
-                print(f"🔧 [WNA16_MOE_LOADER] After repeat shape: {loaded_weight.shape}")
+                if tp_rank == 0:
+                    print(f"🔧 [WNA16_MOE_LOADER] After repeat shape: {loaded_weight.shape}")
 
             if "w13_qzeros" in weight_name:
-                print(f"🔧 [WNA16_MOE_LOADER] Processing w13_qzeros")
+                if tp_rank == 0:
+                    print(f"🔧 [WNA16_MOE_LOADER] Processing w13_qzeros")
                 tensor = loaded_weight.view(layer.tp_size, -1, loaded_weight.size(1))[
                     tp_rank
                 ]
                 if shard_id == "w1":
-                    print(f"🔧 [WNA16_MOE_LOADER] Assigning to w1 part of w13")
+                    if tp_rank == 0:
+                        print(f"🔧 [WNA16_MOE_LOADER] Assigning to w1 part of w13")
                     param.data[expert_id, : shard_size // 2] = tensor
                 else:
-                    print(f"🔧 [WNA16_MOE_LOADER] Assigning to w3 part of w13")
+                    if tp_rank == 0:
+                        print(f"🔧 [WNA16_MOE_LOADER] Assigning to w3 part of w13")
                     param.data[expert_id, shard_size // 2 :] = tensor
             elif "w2_qzeros" in weight_name:
-                print(f"🔧 [WNA16_MOE_LOADER] Processing w2_qzeros")
+                if tp_rank == 0:
+                    print(f"🔧 [WNA16_MOE_LOADER] Processing w2_qzeros")
                 param.data[expert_id] = loaded_weight.view(
                     loaded_weight.size(0), layer.tp_size, -1
                 )[:, tp_rank]
             else:
-                print(f"🔧 [WNA16_MOE_LOADER] Using default weight loader")
+                if tp_rank == 0:
+                    print(f"🔧 [WNA16_MOE_LOADER] Using default weight loader")
                 weight_loader(param, loaded_weight, weight_name, shard_id, expert_id)
 
-            print(f"🔧 [WNA16_MOE_LOADER] Weight loading completed for {weight_name}")
+            if tp_rank == 0:
+                print(f"🔧 [WNA16_MOE_LOADER] Weight loading completed for {weight_name}")
 
         return moe_wna16_weight_loader
