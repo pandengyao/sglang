@@ -435,7 +435,6 @@ class DeepEPMoE(EPMoE):
     def forward_cutlass_w4a8_masked(
         self,
         dispatch_output: DeepEPLLOutput,
-        ep_mode: str,
     ):
         hidden_states, _, _, masked_m, _ = dispatch_output
         output = cutlass_w4a8_moe(
@@ -463,7 +462,7 @@ class DeepEPMoE(EPMoE):
             self.quant_method.problem_sizes2,
             self.w13_input_scale,
             self.w2_input_scale,
-            ep_mode=ep_mode,
+            deepep_mode=dispatch_output.format,
         )
 
         return output
