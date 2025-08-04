@@ -422,15 +422,14 @@ class DeepEPMoE(EPMoE):
             assert deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM and self.use_fp8_w8a8
             return self.forward_deepgemm_contiguous(dispatch_output)
         elif dispatch_output.format.is_deepep_ll():
+            if get_bool_env_var("SGLANG_USE_W4A8"):
+                return self.forward_cutlass_w4a8_masked(dispatch_output)
             assert deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM and self.use_fp8_w8a8
-            if self.use_w4afp8:
-                return self.forward_cutlass_w4a8_masked(
-                    dispatch_output, ep_mode="deepep_ll"
-                )
-            else:
-                return self.forward_deepgemm_masked(dispatch_output)
+            return self.forward_deepgemm_masked(dispatch_output)
         else:
-            raise ValueError(f"Invalid deepep_mode: {self.deepep_mode}")
+            raise ValueError(
+                f"Dispatch output format {dispatch_output.format} is not supported"
+            )
 
     def forward_cutlass_w4a8_masked(
         self,
