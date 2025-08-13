@@ -24,7 +24,7 @@ except ImportError:
     use_deepep = False
 
 from enum import Enum, IntEnum, auto
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, List
 
 import torch
 import torch.distributed as dist
@@ -676,18 +676,113 @@ class DeepEPDispatcher:
 
         self._stage = _Stage.INITIAL
 
-    def dispatch(self, *args, **kwargs) -> Tuple:
-        self.dispatch_a(*args, **kwargs)
+    def dispatch(
+        self,
+        hidden_states: torch.Tensor,      # [num_tokens, hidden_size] - 输入的隐藏状态张量
+        topk_idx: torch.Tensor,           # [num_tokens, top_k] - 每个token选择的top-k专家索引
+        topk_weights: torch.Tensor,       # [num_tokens, top_k] - 每个token对应top-k专家的权重
+        forward_batch: ForwardBatch,      # 批次信息对象，用于确定dispatch模式
+    ) -> Tuple[
+        torch.Tensor,                     # hidden_states: [num_dispatched_tokens, hidden_size] - 分发后的隐藏状态
+        torch.Tensor,                     # topk_idx: [num_dispatched_tokens, top_k] - 分发后的专家索引
+        torch.Tensor,                     # topk_weights: [num_dispatched_tokens, top_k] - 分发后的专家权重
+        Optional[torch.Tensor],           # reorder_topk_ids: [num_total_tokens] 或 None - token重排序索引
+        Optional[List[int]],              # num_recv_tokens_per_expert: [num_experts] 或 None - 每个专家接收的token数
+        Optional[torch.Tensor],           # seg_indptr: [num_experts + 1] 或 None - 专家分段指针
+        Optional[torch.Tensor],           # masked_m: 标量或None - 低延迟模式掩码值
+        Optional[int],                    # expected_m: 标量或None - 低延迟模式期望掩码值
+    ]:
+        """
+        DeepEP专家并行token分发函数
+        
+        输入参数:
+            hidden_states: 输入的隐藏状态张量，形状为 [num_tokens, hidden_size]
+                - num_tokens: 当前批次中的总token数量
+                - hidden_size: 模型的隐藏层维度
+            
+            topk_idx: 专家选择索引，形状为 [num_tokens, top_k]
+                - top_k: 每个token选择的专家数量（通常为2）
+                - 包含每个token选择的top-k个专家的全局索引
+            
+            topk_weights: 专家选择权重，形状为 [num_tokens, top_k]
+                - 通过softmax计算得出，表示每个专家的贡献度
+                - 权重之和为1.0（如果启用renormalize）
+            
+            forward_batch: 批次信息对象
+                - 包含前向模式、批次大小等信息
+                - 用于确定使用normal模式还是low_latency模式
+        
+        输出参数:
+            hidden_states: 分发后的隐藏状态，形状为 [num_dispatched_tokens, hidden_size]
+                - num_dispatched_tokens: 分发到当前GPU的token数量
+                - 可能不等于输入的num_tokens，因为token会在不同GPU间重新分配
+            
+            topk_idx: 分发后的专家索引，形状为 [num_dispatched_tokens, top_k]
+                - 索引会根据当前GPU上的本地专家重新映射
+                - 全局专家索引转换为本地专家索引
+            
+            topk_weights: 分发后的专家权重，形状为 [num_dispatched_tokens, top_k]
+                - 权重值保持不变
+                - 但对应的专家索引可能发生变化
+            
+            reorder_topk_ids: token重排序索引，形状为 [num_total_tokens] 或 None
+                - 正常模式: 包含所有token的重新排序索引，用于后续的unpermute操作
+                - 低延迟模式: None（不使用重排序）
+            
+            num_recv_tokens_per_expert: 每个专家接收的token数量，形状为 [num_experts] 或 None
+                - 正常模式: None（不使用此信息）
+                - 低延迟模式: None（不使用此信息）
+            
+            seg_indptr: 专家分段指针，形状为 [num_experts + 1] 或 None
+                - 正常模式: 用于快速定位每个专家的token范围
+                - 低延迟模式: None（不使用分段信息）
+            
+            masked_m: 掩码值，标量或None
+                - 正常模式: None
+                - 低延迟模式: 实际的掩码值，用于DeepGEMM的掩码计算
+            
+            expected_m: 期望掩码值，标量或None
+                - 正常模式: None
+                - 低延迟模式: 期望的掩码值，用于验证和调试
+        
+        模式说明:
+            - Normal模式: 使用完整的token重排序和分段信息，适合prefill阶段
+            - Low Latency模式: 使用掩码机制，适合decode阶段，延迟更低
+        
+        关键维度变量:
+            - num_tokens: 输入批次中的总token数量
+            - num_dispatched_tokens: 分发到当前GPU的token数量
+            - num_experts: 总专家数量（通常为256）
+            - num_local_experts: 当前GPU上的本地专家数量
+            - hidden_size: 模型的隐藏层维度
+            - top_k: 每个token选择的专家数量（通常为2）
+            - ep_size: 专家并行的GPU数量
+        """
+        self.dispatch_a(hidden_states, topk_idx, topk_weights, forward_batch)
         ret = self.dispatch_b()
         return ret
 
     def dispatch_a(
         self,
-        hidden_states: torch.Tensor,
-        topk_idx: torch.Tensor,
-        topk_weights: torch.Tensor,
-        forward_batch: ForwardBatch,
+        hidden_states: torch.Tensor,      # [num_tokens, hidden_size] - 输入的隐藏状态张量
+        topk_idx: torch.Tensor,           # [num_tokens, top_k] - 每个token选择的top-k专家索引
+        topk_weights: torch.Tensor,       # [num_tokens, top_k] - 每个token对应top-k专家的权重
+        forward_batch: ForwardBatch,      # 批次信息对象，用于确定dispatch模式
     ):
+        """
+        DeepEP token分发的第一阶段
+        
+        执行专家并行分发的准备工作，包括：
+        1. 根据forward_batch确定使用哪种dispatch模式（normal/low_latency）
+        2. 调用对应的dispatch_a实现
+        3. 保存中间状态用于dispatch_b阶段
+        
+        参数说明:
+            hidden_states: 输入的隐藏状态张量
+            topk_idx: 专家选择索引
+            topk_weights: 专家选择权重
+            forward_batch: 批次信息，用于模式选择
+        """
         self._update_stage(_Stage.INITIAL, _Stage.AFTER_DISPATCH_A)
         inner_state = self._get_impl(forward_batch).dispatch_a(
             hidden_states=hidden_states,

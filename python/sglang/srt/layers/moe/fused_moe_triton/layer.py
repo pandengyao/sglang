@@ -27,6 +27,7 @@ from sglang.srt.utils import (
     get_bool_env_var,
     is_cpu,
     is_hip,
+    log_info_on_rank0,
     set_weight_attrs,
     use_intel_amx_backend,
 )
@@ -444,6 +445,10 @@ class FusedMoE(torch.nn.Module):
         enable_ep_moe: Optional[bool] = False,
     ):
         super().__init__()
+        from sglang.srt.distributed import get_tensor_model_parallel_rank
+        current_tp_rank = get_tensor_model_parallel_rank()
+        if current_tp_rank == 0:
+            print(f"🔧 [FUSED_MOE] Initializing FusedMoE layer: num_experts={num_experts}, top_k={top_k}, hidden_size={hidden_size}, intermediate_size={intermediate_size}")
 
         if params_dtype is None:
             params_dtype = torch.get_default_dtype()
@@ -519,6 +524,8 @@ class FusedMoE(torch.nn.Module):
         assert self.quant_method is not None
 
         self.quant_config = quant_config
+        if self.tp_rank == 0:
+            print(f"🔧 [FUSED_MOE] Creating weights with quant_method: {self.quant_method.__class__.__name__}")
         self.quant_method.create_weights(
             layer=self,
             num_experts=self.local_num_experts,
@@ -529,6 +536,8 @@ class FusedMoE(torch.nn.Module):
             params_dtype=params_dtype,
             weight_loader=self.weight_loader,
         )
+        if self.tp_rank == 0:
+            print(f"🔧 [FUSED_MOE] FusedMoE layer initialized successfully")
 
     def _load_per_tensor_weight_scale(
         self,
@@ -746,8 +755,10 @@ class FusedMoE(torch.nn.Module):
         shard_id: str,
         expert_id: int,
     ) -> None:
+        log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Loading weight: {weight_name}, shard_id={shard_id}, expert_id={expert_id}, shape={loaded_weight.shape}, dtype={loaded_weight.dtype}")
         expert_id = self._map_global_expert_id_to_local_expert_id(expert_id)
         if expert_id == -1:
+            log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Skipping weight: {weight_name}, expert_id {expert_id} not in local experts")
             return
 
         # TP rank is set to 0 if EP is enabled
@@ -790,9 +801,11 @@ class FusedMoE(torch.nn.Module):
 
         # Case input scale: input_scale loading is only supported for fp8
         if "input_scale" in weight_name:
+            log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Loading input_scale: {weight_name}, expert_id={expert_id}")
             # INT4-FP8 (INT4 MoE Weight, FP8 Compute): Adjust input_scale for e4m3fnuz (AMD)
             if _is_hip and get_bool_env_var("SGLANG_INT4_WEIGHT"):
                 loaded_weight = loaded_weight * 2.0
+                log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Applied INT4-FP8 scaling factor 2.0 for AMD HIP")
 
             # this is needed for compressed-tensors only
             loaded_weight = loaded_weight.to(param.data.device)
@@ -811,10 +824,12 @@ class FusedMoE(torch.nn.Module):
             self._load_single_value(
                 param=param, loaded_weight=loaded_weight, expert_id=expert_id
             )
+            log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Successfully loaded input_scale: {weight_name}, expert_id={expert_id}")
             return
 
         # Case g_idx
         if "g_idx" in weight_name:
+            log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Loading g_idx: {weight_name}, expert_id={expert_id}")
             self._load_g_idx(
                 shard_dim=0,
                 shard_id=shard_id,
@@ -822,9 +837,11 @@ class FusedMoE(torch.nn.Module):
                 expert_data=expert_data,
                 tp_rank=tp_rank,
             )
+            log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Successfully loaded g_idx: {weight_name}, expert_id={expert_id}")
             return
 
         if "ModelOpt" in self.quant_method.__class__.__name__:
+            log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Processing ModelOpt weight: {weight_name}, expert_id={expert_id}")
             # Determine per-tensor weight scale patterns based on variant
             is_fp4_variant = (
                 "ModelOptNvFp4FusedMoEMethod" in self.quant_method.__class__.__name__
@@ -838,13 +855,16 @@ class FusedMoE(torch.nn.Module):
             ) or "input_scale" in weight_name
 
             if per_tensor_conditions:
+                log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Loading per-tensor weight scale: {weight_name}, expert_id={expert_id}")
                 self._load_per_tensor_weight_scale(
                     shard_id=shard_id,
                     param=param,
                     loaded_weight=loaded_weight,
                     expert_id=expert_id,
                 )
+                log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Successfully loaded per-tensor weight scale: {weight_name}, expert_id={expert_id}")
             elif "weight" in weight_name:
+                log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Loading ModelOpt weight: {weight_name}, expert_id={expert_id}, shard_dim={shard_dim}")
                 self._load_model_weight_or_group_weight_scale(
                     shard_id=shard_id,
                     shard_dim=shard_dim,
@@ -852,10 +872,12 @@ class FusedMoE(torch.nn.Module):
                     expert_data=expert_data,
                     tp_rank=tp_rank,
                 )
+                log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Successfully loaded ModelOpt weight: {weight_name}, expert_id={expert_id}")
             return
 
         # Case weight scales and zero_points
         if "scale" in weight_name or "zero" in weight_name or "offset" in weight_name:
+            log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Loading weight scale/zero/offset: {weight_name}, expert_id={expert_id}")
             # load the weight scales and zp based on the quantization scheme
             # supported weight scales/zp can be found in
             # FusedMoeWeightScaleSupported
@@ -863,9 +885,11 @@ class FusedMoE(torch.nn.Module):
             # specific to each case
             quant_method = getattr(param, "quant_method", None)
             if quant_method == FusedMoeWeightScaleSupported.CHANNEL.value:
+                log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Loading per-channel weight scale: {weight_name}, expert_id={expert_id}")
                 # INT4-FP8 (INT4 MoE Weight, FP8 Compute): Adjust INT4 column-wise scaling number to e4m3fnuz (AMD)
                 if _is_hip and get_bool_env_var("SGLANG_INT4_WEIGHT"):
                     loaded_weight = loaded_weight * 0.5
+                    log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Applied INT4-FP8 scaling factor 0.5 for AMD HIP")
 
                 self._load_per_channel_weight_scale(
                     shard_id=shard_id,
@@ -874,10 +898,12 @@ class FusedMoE(torch.nn.Module):
                     expert_data=expert_data,
                     tp_rank=tp_rank,
                 )
+                log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Successfully loaded per-channel weight scale: {weight_name}, expert_id={expert_id}")
             elif quant_method in [
                 FusedMoeWeightScaleSupported.GROUP.value,
                 FusedMoeWeightScaleSupported.BLOCK.value,
             ]:
+                log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Loading group/block weight scale: {weight_name}, expert_id={expert_id}, quant_method={quant_method}")
                 self._load_model_weight_or_group_weight_scale(
                     shard_id=shard_id,
                     shard_dim=shard_dim,
@@ -885,10 +911,13 @@ class FusedMoE(torch.nn.Module):
                     expert_data=expert_data,
                     tp_rank=tp_rank,
                 )
+                log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Successfully loaded group/block weight scale: {weight_name}, expert_id={expert_id}")
             elif quant_method == FusedMoeWeightScaleSupported.TENSOR.value:
+                log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Loading per-tensor weight scale: {weight_name}, expert_id={expert_id}")
                 # INT4-FP8 (INT4 MoE Weight, FP8 Compute): Adjust FP8 per-tensor scaling number for e4m3fnuz (AMD)
                 if _is_hip and get_bool_env_var("SGLANG_INT4_WEIGHT"):
                     loaded_weight = loaded_weight * 2.0
+                    log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Applied INT4-FP8 scaling factor 2.0 for AMD HIP")
 
                 self._load_per_tensor_weight_scale(
                     shard_id=shard_id,
@@ -896,6 +925,7 @@ class FusedMoE(torch.nn.Module):
                     loaded_weight=loaded_weight,
                     expert_id=expert_id,
                 )
+                log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Successfully loaded per-tensor weight scale: {weight_name}, expert_id={expert_id}")
             else:
                 raise ValueError(
                     f"quant method must be one of {WEIGHT_SCALE_SUPPORTED}"
@@ -904,14 +934,17 @@ class FusedMoE(torch.nn.Module):
 
         # Case weight_shape
         if "weight_shape" in weight_name:
+            log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Loading weight_shape: {weight_name}, expert_id={expert_id}")
             # only required by compressed-tensors
             self._load_single_value(
                 param=param, loaded_weight=loaded_weight, expert_id=expert_id
             )
+            log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Successfully loaded weight_shape: {weight_name}, expert_id={expert_id}")
             return
 
         # Case model weights
         if "weight" in weight_name:
+            log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Loading model weight: {weight_name}, expert_id={expert_id}, shard_dim={shard_dim}, is_transposed={is_transposed}")
             self._load_model_weight_or_group_weight_scale(
                 shard_id=shard_id,
                 shard_dim=shard_dim,
@@ -919,10 +952,12 @@ class FusedMoE(torch.nn.Module):
                 expert_data=expert_data,
                 tp_rank=tp_rank,
             )
+            log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Successfully loaded model weight: {weight_name}, expert_id={expert_id}")
             return
 
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
         assert self.quant_method is not None
+        log_info_on_rank0(logger, f"🔧 [FUSED_MOE] Forward pass: input_shape={hidden_states.shape}, router_logits_shape={router_logits.shape}, top_k={self.top_k}, num_experts={self.num_experts}")
 
         # Matrix multiply.
         final_hidden_states = self.quant_method.apply(
@@ -953,8 +988,12 @@ class FusedMoE(torch.nn.Module):
         )
 
         if self.reduce_results and (self.tp_size > 1 or self.ep_size > 1):
+            if self.tp_rank == 0:
+                print(f"🔧 [FUSED_MOE] Performing all_reduce: tp_size={self.tp_size}, ep_size={self.ep_size}")
             final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
 
+        if self.tp_rank == 0:
+            print(f"🔧 [FUSED_MOE] Forward pass completed: output_shape={final_hidden_states.shape}")
         return final_hidden_states
 
     @classmethod

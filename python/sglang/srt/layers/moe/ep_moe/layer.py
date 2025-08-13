@@ -53,6 +53,7 @@ from sglang.srt.utils import (
     get_bool_env_var,
     is_hip,
     is_npu,
+    log_info_on_rank0,
     set_weight_attrs,
 )
 
@@ -78,6 +79,13 @@ logger = logging.getLogger(__name__)
 
 
 class GroupedGemmRunner(torch.nn.Module):
+    """
+    分组GEMM运行器，用于执行多个小矩阵的批量矩阵乘法操作
+    
+    支持两种后端：
+    1. FlashInfer: 用于高性能推理
+    2. Triton: 用于通用计算
+    """
     flashinfer_gemm_warpper = None
 
     def __init__(
@@ -86,6 +94,14 @@ class GroupedGemmRunner(torch.nn.Module):
         use_flashinfer: bool = False,
         use_per_token_if_dynamic: bool = True,
     ):
+        """
+        初始化分组GEMM运行器
+        
+        Args:
+            device: 计算设备
+            use_flashinfer: 是否使用FlashInfer后端
+            use_per_token_if_dynamic: 动态量化时是否使用per-token缩放
+        """
         super().__init__()
         self.device = device
         self.use_flashinfer = use_flashinfer
@@ -95,6 +111,12 @@ class GroupedGemmRunner(torch.nn.Module):
 
     @classmethod
     def _init_flashinfer_wrapper(cls, device):
+        """
+        初始化FlashInfer包装器
+        
+        Args:
+            device: 计算设备
+        """
         from flashinfer import SegmentGEMMWrapper
 
         workspace_buffer = torch.empty(
@@ -118,6 +140,26 @@ class GroupedGemmRunner(torch.nn.Module):
         block_shape: Optional[List[int]] = None,
         c_dtype=None,
     ):
+        """
+        执行分组GEMM操作：c = a * b
+        
+        Args:
+            a: 输入张量A
+            b: 权重张量B
+            c: 输出张量C
+            batch_size: 批次大小
+            weight_column_major: 权重是否按列主序存储
+            seg_indptr: 分段指针，用于分组计算
+            weight_indices: 权重索引
+            use_fp8_w8a8: 是否使用FP8 W8A8量化
+            scale_a: 输入A的缩放因子
+            scale_b: 权重B的缩放因子
+            block_shape: 块形状，用于块量化
+            c_dtype: 输出张量的数据类型
+            
+        Returns:
+            计算结果张量C
+        """
         if self.use_flashinfer:
             # TODO: flashinfer
             assert False
@@ -191,12 +233,15 @@ class EPMoE(torch.nn.Module):
 
         self.layer_id = layer_id
         self.num_experts = num_experts
+        log_info_on_rank0(logger, f"[EPMoE.init] self.num_experts={self.num_experts}")
         assert self.num_experts % self.tp_size == 0
         assert (
             num_fused_shared_experts == 0
         ), "num_fused_shared_experts is not supported in EP"
         self.num_fused_shared_experts = num_fused_shared_experts
         self.num_experts_per_partition, self.expert_map = self.determine_expert_map()
+        # log_info_on_rank0(logger, f"[EPMoE.init] self.layer_id={self.layer_id}, self.num_experts_per_partition={self.num_experts_per_partition}")
+        # log_info_on_rank0(logger, f"[EPMoE.init] self.layer_id={self.layer_id}, self.expert_map: shape={self.expert_map.shape}, dtype={self.expert_map.dtype}, self.expert_map={self.expert_map}")
         self.start_expert_id = self.tp_rank * self.num_experts_per_partition
         self.end_expert_id = self.start_expert_id + self.num_experts_per_partition - 1
 
@@ -298,10 +343,12 @@ class EPMoE(torch.nn.Module):
             return (global_num_experts, None)
 
         local_num_experts = global_num_experts // ep_size
+        # log_info_on_rank0(logger, f"[EPMoE.determine_expert_map] global_num_experts={global_num_experts}, ep_size={ep_size}, ep_rank={ep_rank}, local_num_experts={local_num_experts}")
 
         expert_map = torch.full(
             (global_num_experts,), self.num_experts, dtype=torch.int32
         )
+        # log_info_on_rank0(logger, f"[EPMoE.determine_expert_map] expert_map: shape={expert_map.shape}, dtype={expert_map.dtype}")
         if ep_rank < (ep_size - 1):
             expert_map[
                 ep_rank * local_num_experts : (ep_rank + 1) * local_num_experts
@@ -315,6 +362,16 @@ class EPMoE(torch.nn.Module):
         return (local_num_experts, expert_map)
 
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
+        """
+        EPMoE的前向传播函数
+        
+        Args:
+            hidden_states: 输入的隐藏状态张量
+            router_logits: 路由器逻辑值，用于专家选择
+            
+        Returns:
+            计算后的隐藏状态张量
+        """
         if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM and self.use_fp8_w8a8:
             return self.forward_deepgemm(hidden_states, router_logits)
         else:
@@ -323,11 +380,23 @@ class EPMoE(torch.nn.Module):
     def forward_deepgemm(
         self, hidden_states: torch.Tensor, router_logits: torch.Tensor
     ):
+        """
+        使用DeepGEMM的EPMoE前向传播实现
+        
+        Args:
+            hidden_states: 输入的隐藏状态张量
+            router_logits: 路由器逻辑值，用于专家选择
+            
+        Returns:
+            计算后的隐藏状态张量
+        """
         assert self.quant_method is not None
         assert self.activation == "silu"
         hidden_states_shape = hidden_states.shape
         hidden_states_dtype = hidden_states.dtype
         hidden_states_device = hidden_states.device
+        
+        # 选择专家：根据路由器逻辑值选择top-k专家
         topk_weights, topk_ids = select_experts(
             hidden_states=hidden_states,
             router_logits=router_logits,
@@ -500,7 +569,11 @@ class EPMoE(torch.nn.Module):
                 layer_id=self.layer_id,
             ),
         )
-
+        logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, hidden_states: shape={hidden_states.shape}, dtype={hidden_states.dtype}, hidden_states[0,:10]={hidden_states[0,:10].detach().cpu().float().numpy()}")
+        logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, topk_weights: shape={topk_weights.shape}, dtype={topk_weights.dtype}, topk_weights={topk_weights.detach().cpu().float().numpy()}")
+        logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, topk_ids: shape={topk_ids.shape}, dtype={topk_ids.dtype}, topk_ids={topk_ids.detach().cpu().numpy()}")
+        logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, expert_map[topk_ids]: shape={self.expert_map[topk_ids].shape}, dtype={self.expert_map[topk_ids].dtype}")
+        
         if self.use_w4afp8:
             local_topk_ids = topk_ids
             if self.expert_map is not None:
@@ -510,34 +583,55 @@ class EPMoE(torch.nn.Module):
                     self.expert_map[topk_ids],
                     self.num_experts,
                 )
-
+                
+            logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, local_topk_ids: shape={local_topk_ids.shape}, dtype={local_topk_ids.dtype}, local_topk_ids={local_topk_ids.detach().cpu().numpy()}")
+            logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, self.start_expert_id={self.start_expert_id}, self.end_expert_id={self.end_expert_id}")
+            # log_info_on_rank0(logger, f"self.num_experts={self.num_experts}")
+            # log_info_on_rank0(logger, f"self.w13_weight: shape={self.w13_weight.shape}, dtype={self.w13_weight.dtype}")
+            # log_info_on_rank0(logger, f"self.w2_weight: shape={self.w2_weight.shape}, dtype={self.w2_weight.dtype}")
+            # log_info_on_rank0(logger, f"self.w13_weight_scale_inv: shape={self.w13_weight_scale_inv.shape}, dtype={self.w13_weight_scale_inv.dtype}")
+            # log_info_on_rank0(logger, f"self.w2_weight_scale_inv: shape={self.w2_weight_scale_inv.shape}, dtype={self.w2_weight_scale_inv.dtype}")
+            # log_info_on_rank0(logger, f"self.quant_method.a_strides1: shape={self.quant_method.a_strides1.shape}, dtype={self.quant_method.a_strides1.dtype}")
+            # log_info_on_rank0(logger, f"self.quant_method.b_strides1: shape={self.quant_method.b_strides1.shape}, dtype={self.quant_method.b_strides1.dtype}")
+            # log_info_on_rank0(logger, f"self.quant_method.c_strides1: shape={self.quant_method.c_strides1.shape}, dtype={self.quant_method.c_strides1.dtype}")
+            # log_info_on_rank0(logger, f"self.quant_method.a_strides2: shape={self.quant_method.a_strides2.shape}, dtype={self.quant_method.a_strides2.dtype}")
+            # log_info_on_rank0(logger, f"self.quant_method.b_strides2: shape={self.quant_method.b_strides2.shape}, dtype={self.quant_method.b_strides2.dtype}")
+            # log_info_on_rank0(logger, f"self.quant_method.c_strides2: shape={self.quant_method.c_strides2.shape}, dtype={self.quant_method.c_strides2.dtype}")
+            # log_info_on_rank0(logger, f"self.quant_method.s_strides13: shape={self.quant_method.s_strides13.shape}, dtype={self.quant_method.s_strides13.dtype}")
+            # log_info_on_rank0(logger, f"self.quant_method.expert_offsets: shape={self.quant_method.expert_offsets.shape}, dtype={self.quant_method.expert_offsets.dtype}")
+            # log_info_on_rank0(logger, f"self.quant_method.problem_sizes1: shape={self.quant_method.problem_sizes1.shape}, dtype={self.quant_method.problem_sizes1.dtype}")
+            # log_info_on_rank0(logger, f"self.quant_method.problem_sizes2: shape={self.quant_method.problem_sizes2.shape}, dtype={self.quant_method.problem_sizes2.dtype}")
+            # log_info_on_rank0(logger, f"self.w13_input_scale: shape={self.w13_input_scale.shape}, dtype={self.w13_input_scale.dtype}")
+            # log_info_on_rank0(logger, f"self.w2_input_scale: shape={self.w2_input_scale.shape}, dtype={self.w2_input_scale.dtype}")
+            
             output = cutlass_w4a8_moe(
-                self.start_expert_id,
-                self.end_expert_id,
-                self.num_experts,
-                hidden_states,
-                self.w13_weight,
-                self.w2_weight,
-                self.w13_weight_scale_inv,
-                self.w2_weight_scale_inv,
-                topk_weights,
-                topk_ids,
-                local_topk_ids,
-                self.quant_method.a_strides1,
-                self.quant_method.b_strides1,
-                self.quant_method.c_strides1,
-                self.quant_method.a_strides2,
-                self.quant_method.b_strides2,
-                self.quant_method.c_strides2,
-                self.quant_method.s_strides13,
-                self.quant_method.s_strides2,
-                self.quant_method.expert_offsets,
-                self.quant_method.problem_sizes1,
-                self.quant_method.problem_sizes2,
-                self.w13_input_scale,
-                self.w2_input_scale,
+                self.start_expert_id, #self.start_expert_id=0
+                self.end_expert_id,   #self.end_expert_id=63
+                self.num_experts,     #self.num_experts=256
+                hidden_states,   #shape=torch.Size([32, 7168]), dtype=torch.bfloat16
+                self.w13_weight, #shape=torch.Size([64, 4096, 3584]), dtype=torch.int8
+                self.w2_weight,  #shape=torch.Size([64, 7168, 1024]), dtype=torch.int8
+                self.w13_weight_scale_inv, #shape=torch.Size([64, 14, 16384]), dtype=torch.bfloat16
+                self.w2_weight_scale_inv,  #shape=torch.Size([64, 4, 28672]), dtype=torch.bfloat16
+                topk_weights,  #shape=torch.Size([32, 8]), dtype=torch.float32
+                topk_ids,      #shape=torch.Size([32, 8]), dtype=torch.int64
+                local_topk_ids,#shape=torch.Size([32, 8]), dtype=torch.int32
+                self.quant_method.a_strides1,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.b_strides1,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.c_strides1,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.a_strides2,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.b_strides2,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.c_strides2,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.s_strides13, #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.s_strides2,  #shape=torch.Size([64, 3]), dtype=torch.int64
+                self.quant_method.expert_offsets, #shape=torch.Size([65]), dtype=torch.int32
+                self.quant_method.problem_sizes1, #shape=torch.Size([64, 3]), dtype=torch.int32
+                self.quant_method.problem_sizes2, #shape=torch.Size([64, 3]), dtype=torch.int32
+                self.w13_input_scale, #shape=torch.Size([1]), dtype=torch.bfloat16
+                self.w2_input_scale,  #shape=torch.Size([1]), dtype=torch.bfloat16
             )
-            return output
+            logger.info(f"[EPMoE.forward_normal] output: shape={output.shape}, dtype={output.dtype}")
+            return output #shape=torch.Size([32, 7168]), dtype=torch.bfloat16
 
         if self.grouped_gemm_runner is None:
             self.grouped_gemm_runner = GroupedGemmRunner(
@@ -742,6 +836,18 @@ class EPMoE(torch.nn.Module):
         ckpt_up_proj_name: str,
         num_experts: int,
     ) -> List[Tuple[str, str, int, str]]:
+        """
+        创建专家参数映射，用于从检查点加载权重
+        
+        Args:
+            ckpt_gate_proj_name: 检查点中门控投影的名称
+            ckpt_down_proj_name: 检查点中下投影的名称
+            ckpt_up_proj_name: 检查点中上投影的名称
+            num_experts: 专家数量
+            
+        Returns:
+            参数映射列表，每个元素包含(param_name, weight_name, expert_id, shard_id)
+        """
         return [
             # (param_name, weight_name, expert_id, shard_id)
             (
@@ -767,6 +873,15 @@ class EPMoE(torch.nn.Module):
         cls,
         num_experts: int,
     ) -> List[Tuple[str, str, int, str]]:
+        """
+        创建专家输入缩放参数映射
+        
+        Args:
+            num_experts: 专家数量
+            
+        Returns:
+            输入缩放参数映射列表，每个元素包含(param_name, weight_name, expert_id, shard_id)
+        """
         # (param_name, weight_name, expert_id, shard_id)
         return [
             (
@@ -787,6 +902,16 @@ class EPMoE(torch.nn.Module):
         shard_id: str,
         expert_id: int,
     ) -> None:
+        """
+        权重加载器，处理逻辑专家ID到物理专家ID的映射
+        
+        Args:
+            param: 要加载权重的参数
+            loaded_weight: 从检查点加载的权重
+            weight_name: 权重名称
+            shard_id: 分片ID
+            expert_id: 逻辑专家ID
+        """
         physical_expert_ids = (
             get_global_expert_location_metadata().logical_to_all_physical(
                 self.layer_id, expert_id
@@ -809,6 +934,16 @@ class EPMoE(torch.nn.Module):
         shard_id: str,
         expert_id: int,
     ) -> None:
+        """
+        物理权重加载器，将权重加载到指定的物理专家位置
+        
+        Args:
+            param: 要加载权重的参数
+            loaded_weight: 从检查点加载的权重
+            weight_name: 权重名称
+            shard_id: 分片ID (w1, w2, w3)
+            expert_id: 物理专家ID
+        """
         if expert_id < self.start_expert_id or expert_id > self.end_expert_id:
             return
         expert_id = expert_id - self.start_expert_id
@@ -829,6 +964,7 @@ class EPMoE(torch.nn.Module):
             )
             return
 
+        # 根据分片ID将权重加载到相应的位置
         if shard_id == "w2":
             param.data[expert_id] = loaded_weight
         elif shard_id == "w1":
@@ -846,6 +982,16 @@ class EPMoE(torch.nn.Module):
         shard_id: str,
         expert_id: int,
     ) -> None:
+        """
+        加载FP8缩放因子
+        
+        Args:
+            param: 要加载缩放因子的参数
+            loaded_weight: 从检查点加载的缩放因子
+            weight_name: 权重名称
+            shard_id: 分片ID (w1, w2, w3)
+            expert_id: 专家ID
+        """
         param_data = param.data
 
         # Input scales can be loaded directly and should be equal.
@@ -905,6 +1051,11 @@ class EPMoE(torch.nn.Module):
 
 
 class UnquantizedEPMoEMethod(FusedMoEMethodBase, CustomOp):
+    """
+    未量化的EPMoE方法实现
+    
+    用于处理未量化的MoE模型，支持标准的浮点运算。
+    """
 
     def create_weights(
         self,
@@ -973,6 +1124,23 @@ class UnquantizedEPMoEMethod(FusedMoEMethodBase, CustomOp):
         num_expert_group: Optional[int] = None,
         custom_routing_function: Optional[Callable] = None,
     ) -> torch.Tensor:
+        """
+        应用未量化MoE方法
+        
+        Args:
+            layer: MoE层
+            x: 输入张量
+            router_logits: 路由器逻辑值
+            top_k: 选择的专家数量
+            renormalize: 是否重新归一化
+            use_grouped_topk: 是否使用分组top-k
+            topk_group: top-k分组大小
+            num_expert_group: 专家组数量
+            custom_routing_function: 自定义路由函数
+            
+        Returns:
+            计算结果张量
+        """
         raise NotImplementedError
 
 
@@ -986,6 +1154,12 @@ class Fp8EPMoEMethod(Fp8MoEMethod):
     """
 
     def __init__(self, quant_config: Fp8Config):
+        """
+        初始化FP8 MoE方法
+        
+        Args:
+            quant_config: FP8量化配置
+        """
         self.quant_config = quant_config
         self.block_quant = self.quant_config.weight_block_size is not None
 
@@ -1251,6 +1425,30 @@ class DeepEPMoE(EPMoE):
         routed_scaling_factor: Optional[float] = None,
         deepep_mode: DeepEPMode = DeepEPMode.auto,
     ):
+        """
+        初始化DeepEPMoE模型
+        
+        Args:
+            num_experts: 专家数量
+            top_k: 每个token选择的专家数量
+            hidden_size: 隐藏层维度
+            intermediate_size: 中间层维度
+            layer_id: 层ID
+            params_dtype: 参数数据类型
+            renormalize: 是否重新归一化专家权重
+            use_grouped_topk: 是否使用分组top-k
+            num_expert_group: 专家组数量
+            num_fused_shared_experts: 融合共享专家数量
+            topk_group: top-k分组大小
+            quant_config: 量化配置
+            tp_size: 张量并行大小
+            prefix: 参数前缀
+            correction_bias: 校正偏置
+            custom_routing_function: 自定义路由函数
+            activation: 激活函数类型
+            routed_scaling_factor: 路由缩放因子
+            deepep_mode: DeepEP运行模式
+        """
         super().__init__(
             num_experts=num_experts,
             top_k=top_k,
@@ -1290,6 +1488,7 @@ class DeepEPMoE(EPMoE):
             # the last one is invalid rank_id
             self.expert_mask[:-1] = 1
         else:
+            # 准备FP8格式的权重张量，包括数据和缩放因子
             self.w13_weight_fp8 = (
                 self.w13_weight,
                 (
@@ -1319,6 +1518,23 @@ class DeepEPMoE(EPMoE):
         num_recv_tokens_per_expert: List[int],
         forward_batch: ForwardBatch,
     ):
+        """
+        DeepEPMoE的前向传播函数，根据不同的模式和配置选择相应的计算路径
+        
+        Args:
+            hidden_states: 输入的隐藏状态张量
+            topk_idx: top-k专家选择的索引
+            topk_weights: top-k专家的权重
+            reorder_topk_ids: 重新排序后的top-k专家ID
+            seg_indptr: 分段指针，用于分组计算
+            masked_m: 掩码矩阵，用于低延迟模式
+            expected_m: 期望的序列长度
+            num_recv_tokens_per_expert: 每个专家接收的token数量列表
+            forward_batch: 前向传播批次信息
+            
+        Returns:
+            计算后的隐藏状态张量
+        """
         if _use_aiter:
             # in forward_aiter, we skip token permutation and unpermutation, which have been fused inside aiter kernel
             return self.forward_aiter(hidden_states, topk_idx, topk_weights)
@@ -1343,6 +1559,17 @@ class DeepEPMoE(EPMoE):
         reorder_topk_ids: torch.Tensor,
         seg_indptr: torch.Tensor,
     ):
+        """
+        标准的DeepEP前向传播实现，使用分组GEMM计算
+        
+        Args:
+            hidden_states: 输入的隐藏状态张量
+            reorder_topk_ids: 重新排序后的top-k专家ID
+            seg_indptr: 分段指针，用于分组计算
+            
+        Returns:
+            计算后的隐藏状态张量
+        """
         hidden_states_dtype = hidden_states.dtype
         hidden_states_device = hidden_states.device
 
@@ -1353,6 +1580,7 @@ class DeepEPMoE(EPMoE):
                 hidden_states.device, use_flashinfer=False  # TODO: use flashinfer
             )
 
+        # 动态激活方案下的输入缩放计算
         if self.activation_scheme == "dynamic" and not self.use_block_quant:
             max_value = (
                 torch.max(hidden_states)
@@ -1367,7 +1595,7 @@ class DeepEPMoE(EPMoE):
             dtype=torch.int64,
         )
 
-        # GroupGemm-0
+        # GroupGemm-0: 第一个分组矩阵乘法，计算gate和up投影
         if hidden_states.shape[0] > 0:
             gateup_output = self.grouped_gemm_runner(
                 a=hidden_states,
@@ -1395,7 +1623,7 @@ class DeepEPMoE(EPMoE):
                 dtype=hidden_states.dtype,
             )
 
-        # Act
+        # 激活函数处理：SiLU激活和门控乘法
         down_input = torch.empty(
             gateup_output.shape[0],
             gateup_output.shape[1] // 2,
@@ -1429,7 +1657,7 @@ class DeepEPMoE(EPMoE):
 
         del gateup_output
 
-        # GroupGemm-1
+        # GroupGemm-1: 第二个分组矩阵乘法，计算down投影
         down_output = torch.empty(
             down_input.shape[0],
             self.w2_weight.shape[1],
@@ -1462,6 +1690,17 @@ class DeepEPMoE(EPMoE):
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
     ):
+        """
+        使用Aiter内核的融合MoE前向传播实现
+        
+        Args:
+            hidden_states: 输入的隐藏状态张量
+            topk_idx: top-k专家选择的索引
+            topk_weights: top-k专家的权重
+            
+        Returns:
+            计算后的隐藏状态张量
+        """
         if hidden_states.shape[0] == 0:
             return hidden_states
         # in original deepep, idx == -1 meaning invalid and will not be processed.
@@ -1494,6 +1733,18 @@ class DeepEPMoE(EPMoE):
         topk_weights,
         num_recv_tokens_per_expert: List[int],
     ):
+        """
+        使用DeepGEMM连续内存布局的前向传播实现
+        
+        Args:
+            hidden_states_fp8: FP8格式的隐藏状态张量元组(数据, 缩放因子)
+            topk_idx: top-k专家选择的索引
+            topk_weights: top-k专家的权重
+            num_recv_tokens_per_expert: 每个专家接收的token数量列表
+            
+        Returns:
+            计算后的隐藏状态张量
+        """
         hidden_states_fp8, hidden_states_scale = hidden_states_fp8
         assert self.quant_method is not None
         assert self.activation == "silu"
@@ -1510,6 +1761,7 @@ class DeepEPMoE(EPMoE):
         hidden_states_fp8_device = hidden_states_fp8.device
         hidden_states_fp8_dtype = hidden_states_fp8.dtype
 
+        # 准备输入张量，包括数据和缩放因子
         input_tensor = [
             torch.empty(
                 (all_tokens, K),
@@ -1544,6 +1796,7 @@ class DeepEPMoE(EPMoE):
         ).cuda(non_blocking=True)
         expert_start_loc = torch.empty_like(num_recv_tokens_per_expert_gpu)
 
+        # 专家并行散射操作：将token分发到相应的专家
         ep_scatter(
             hidden_states_fp8,
             hidden_states_scale,
@@ -1558,6 +1811,7 @@ class DeepEPMoE(EPMoE):
         )
         dispose_tensor(hidden_states_fp8)
 
+        # 第一个DeepGEMM操作：计算gate和up投影
         gateup_output = torch.empty(
             (all_tokens, N),
             device=hidden_states_fp8_device,
@@ -1569,6 +1823,8 @@ class DeepEPMoE(EPMoE):
             input_tensor, self.w13_weight_fp8, gateup_output, m_indices
         )
         del input_tensor
+        
+        # 激活函数处理：SiLU激活和门控乘法
         down_input = torch.empty(
             (
                 all_tokens,
@@ -1579,6 +1835,8 @@ class DeepEPMoE(EPMoE):
         )
         silu_and_mul(gateup_output.view(-1, N), down_input)
         del gateup_output
+        
+        # 第二个DeepGEMM操作：计算down投影
         down_output = torch.empty(
             (all_tokens, K),
             device=hidden_states_fp8_device,
@@ -1602,6 +1860,7 @@ class DeepEPMoE(EPMoE):
         )
         del down_input_fp8, down_input_scale
 
+        # 专家并行聚集操作：将专家计算结果收集回原始位置
         gather_out = torch.empty(
             hidden_states_fp8_shape,
             device=hidden_states_fp8_device,
@@ -1617,10 +1876,21 @@ class DeepEPMoE(EPMoE):
         masked_m: torch.Tensor,
         expected_m: int,
     ):
+        """
+        使用DeepGEMM掩码模式的前向传播实现，适用于低延迟场景
+        
+        Args:
+            hidden_states_fp8: FP8格式的隐藏状态张量元组(数据, 缩放因子)
+            masked_m: 掩码矩阵，用于控制计算的有效序列长度
+            expected_m: 期望的序列长度
+            
+        Returns:
+            计算后的隐藏状态张量
+        """
         assert self.quant_method is not None
         assert self.activation == "silu"
 
-        # GroupGemm-0
+        # GroupGemm-0: 第一个分组矩阵乘法，使用掩码模式
         num_groups, m, k = hidden_states_fp8[0].size()
         n = self.w13_weight.size(1)
         expected_m = min(expected_m, m)
@@ -1637,7 +1907,7 @@ class DeepEPMoE(EPMoE):
         )
         dispose_tensor(hidden_states_fp8[0])
 
-        # Act
+        # 激活函数处理：SiLU激活和门控乘法，使用掩码后量化
         down_input = torch.empty(
             (
                 gateup_output.shape[0],
@@ -1667,7 +1937,7 @@ class DeepEPMoE(EPMoE):
         )
         del gateup_output
 
-        # GroupGemm-1
+        # GroupGemm-1: 第二个分组矩阵乘法，使用掩码模式
         n = self.w2_weight.size(1)
         down_input_fp8 = (
             down_input,

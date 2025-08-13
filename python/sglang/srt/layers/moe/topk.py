@@ -36,6 +36,8 @@ from sglang.srt.utils import (
     is_cuda,
     is_hip,
     is_npu,
+    log_info_on_rank0,
+    logger,
 )
 
 _is_cuda = is_cuda()
@@ -512,5 +514,5 @@ def select_experts(
         )
 
     get_global_expert_distribution_recorder().on_select_experts(topk_ids=topk_ids)
-
+    
     return topk_weights, topk_ids

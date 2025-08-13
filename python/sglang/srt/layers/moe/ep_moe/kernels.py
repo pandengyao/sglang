@@ -87,11 +87,18 @@ def deepep_post_reorder_triton_kernel(
 def compute_src2dst_triton_kernel(
     reorder_ids, src2dst, num_toks, BLOCK_SIZE: tl.constexpr
 ):
-    pid = tl.program_id(axis=0)
-    dst_id = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = dst_id < num_toks
-    src_id = tl.load(reorder_ids + dst_id, mask=mask)
-    tl.store(src2dst + src_id, dst_id, mask=mask)
+    # Triton kernel，用于计算 src2dst 映射表
+    # 输入:
+    #   reorder_ids: 排序后每个元素在原始张量中的索引
+    #   src2dst: 输出，原始 token 索引 -> 排序后 token 索引
+    #   num_toks: token 总数
+    #   BLOCK_SIZE: 每个 block 处理的 token 数
+    pid = tl.program_id(axis=0)  # 当前 block id
+    dst_id = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)  # 该 block 负责的 token 索引
+    mask = dst_id < num_toks  # 边界检查
+    src_id = tl.load(reorder_ids + dst_id, mask=mask)  # 取出排序前的 token 索引
+    tl.store(src2dst + src_id, dst_id, mask=mask)  # 将排序后索引写入 src2dst
+    # 这样 src2dst[src_id] = dst_id，后续可用 src2dst 实现原始顺序和排序顺序的高效互查
 
 
 @triton.jit
@@ -165,20 +172,30 @@ def run_moe_ep_preproess(topk_ids: torch.Tensor, num_experts: int):
 
 
 def run_cutlass_moe_ep_preproess(local_topk_ids: torch.Tensor, local_num_experts: int):
+    # 对输入的 local_topk_ids 进行排序，得到排序后的 token->expert 映射和原始索引
     reorder_topk_ids, reorder_ids = torch.sort(local_topk_ids.view(-1), stable=True)
+    # reorder_topk_ids: 排序后的 expert id
+    # reorder_ids: 排序后每个元素在原始张量中的索引
 
+    # 初始化每个 expert 的分段指针（未填充，后续可用于统计每个 expert 分配到的 token 数）
     seg_indptr = torch.zeros(
         local_num_experts + 1, device=local_topk_ids.device, dtype=torch.int64
     )
+    # seg_indptr: [num_experts+1]，每个 expert 的 token 起止位置（未填充）
+
+    # 初始化 src2dst 映射表，后续用于数据重排
     src2dst = torch.empty(
         local_topk_ids.numel(), device=local_topk_ids.device, dtype=torch.int32
     )
+    # src2dst: [num_tokens]，原始 token 索引 -> 排序后 token 索引
 
     BLOCK_SIZE = 512
     grid = (triton.cdiv(local_topk_ids.numel(), BLOCK_SIZE),)
+    # 启动 Triton kernel，计算 src2dst 映射
     compute_src2dst_triton_kernel[grid](
         reorder_ids, src2dst, local_topk_ids.numel(), BLOCK_SIZE
     )
+    # 该 kernel 会将排序后 token 的新索引写入 src2dst，使后续可以高效重排数据
 
     return reorder_topk_ids, src2dst, seg_indptr
 
@@ -195,29 +212,43 @@ def pre_reorder_triton_kernel_for_cutlass_moe(
     hidden_size,
     BLOCK_SIZE: tl.constexpr,
 ):
+    # 该 kernel 实现了：
+    #   1. 按 token->expert 分配重排输入数据
+    #   2. 可选做归一化/量化
+    #   3. 支持批量高效处理，便于后续分组 GEMM
+    # Triton kernel，用于将输入张量按 token->expert 分配重排，并可选做归一化/量化
+    # input_ptr: 原始输入张量指针（[num_tokens, hidden_size]）
+    # gateup_input_ptr: 输出张量指针（重排后，供后续 GEMM 使用）
+    # src2dst_ptr: token 重排索引（src2dst），指明每个 token 在重排后的位置
+    # topk_ids_ptr: 每个 token 分配到的 expert id
+    # a1_scales_ptr: 可选的归一化 scale（如量化用）
+    # num_experts: 专家数
+    # topk: 每个 token 分配的 expert 数
+    # hidden_size: 隐藏层维度
+    # BLOCK_SIZE: 每次处理的隐藏单元数
     OutDtype = gateup_input_ptr.dtype.element_ty
 
-    src_idx = tl.program_id(0)
-    src2dst_ptr = src2dst_ptr + src_idx * topk
-    topk_ids_ptr = topk_ids_ptr + src_idx * topk
+    src_idx = tl.program_id(0)  # 当前处理的 token 索引
+    src2dst_ptr = src2dst_ptr + src_idx * topk  # 当前 token 的 src2dst 起始位置
+    topk_ids_ptr = topk_ids_ptr + src_idx * topk  # 当前 token 的 topk_ids 起始位置
 
-    src_ptr = input_ptr + src_idx * hidden_size
-    for idx in range(topk):
-        expert_id = tl.load(topk_ids_ptr + idx)
-        if expert_id != num_experts:
+    src_ptr = input_ptr + src_idx * hidden_size  # 当前 token 的输入起始位置
+    for idx in range(topk):  # 遍历该 token 分配到的每个 expert
+        expert_id = tl.load(topk_ids_ptr + idx)  # 取出 expert id
+        if expert_id != num_experts:  # 跳过无效 expert
             if a1_scales_ptr is not None:
-                scale = 1.0 / tl.load(a1_scales_ptr)
+                scale = 1.0 / tl.load(a1_scales_ptr)  # 若有 scale，做归一化
             else:
-                scale = 1.0
+                scale = 1.0  # 否则不缩放
 
-            dst_idx = tl.load(src2dst_ptr + idx)
-            dst_ptr = gateup_input_ptr + dst_idx * hidden_size
-            for start_offset in tl.range(0, hidden_size, BLOCK_SIZE):
+            dst_idx = tl.load(src2dst_ptr + idx)  # 取出重排后的位置
+            dst_ptr = gateup_input_ptr + dst_idx * hidden_size  # 目标写入位置
+            for start_offset in tl.range(0, hidden_size, BLOCK_SIZE):  # 分块处理隐藏单元
                 offset = start_offset + tl.arange(0, BLOCK_SIZE)
-                mask = offset < hidden_size
-                in_data = tl.load(src_ptr + offset, mask=mask).to(tl.float32)
-                out_data = (in_data * scale).to(OutDtype)
-                tl.store(dst_ptr + offset, out_data, mask=mask)
+                mask = offset < hidden_size  # 边界检查
+                in_data = tl.load(src_ptr + offset, mask=mask).to(tl.float32)  # 读入数据
+                out_data = (in_data * scale).to(OutDtype)  # 可选归一化并转为目标类型
+                tl.store(dst_ptr + offset, out_data, mask=mask)  # 写入目标位置
 
 
 @triton.jit
@@ -539,38 +570,50 @@ def post_reorder_triton_kernel(
     dst_start,
     BLOCK_SIZE: tl.constexpr,
 ):
+    # Triton kernel，用于将分组 GEMM 的输出按 token 顺序重排，并应用门控权重
+    # down_output_ptr: GEMM 输出张量指针（[num_tokens, hidden_size]，重排后）
+    # output_ptr: 最终输出张量指针（原始 token 顺序）
+    # src2dst_ptr: token 重排索引（src2dst），指明每个 token 在重排后的位置
+    # topk_ids_ptr: 每个 token 分配到的 expert id
+    # topk_weights_ptr: 每个 token 分配到的 expert 权重
+    # start_expert_id, end_expert_id: 当前处理的 expert id 范围
+    # topk: 每个 token 分配的 expert 数
+    # hidden_size: 隐藏层维度
+    # dst_start: 当前分片的起始 token 索引
+    # BLOCK_SIZE: 每次处理的隐藏单元数
     InDtype = down_output_ptr.dtype.element_ty
 
-    src_idx_int32 = tl.program_id(0)
-    src_idx = src_idx_int32.to(tl.int64)
-    src2dst_ptr = src2dst_ptr + src_idx * topk
-    topk_ids_ptr = topk_ids_ptr + src_idx * topk
-    topk_weights_ptr = topk_weights_ptr + src_idx * topk
+    src_idx_int32 = tl.program_id(0)  # 当前处理的 token 索引（int32）
+    src_idx = src_idx_int32.to(tl.int64)  # 转为 int64
+    src2dst_ptr = src2dst_ptr + src_idx * topk  # 当前 token 的 src2dst 起始位置
+    topk_ids_ptr = topk_ids_ptr + src_idx * topk  # 当前 token 的 topk_ids 起始位置
+    topk_weights_ptr = topk_weights_ptr + src_idx * topk  # 当前 token 的 topk_weights 起始位置
 
-    computed = False
-    store_ptr = output_ptr + src_idx * hidden_size
+    computed = False  # 标记该 token 是否有有效 expert
+    store_ptr = output_ptr + src_idx * hidden_size  # 当前 token 的输出写入位置
 
     vec = tl.arange(0, BLOCK_SIZE)
 
-    for start_offset in tl.range(0, hidden_size, BLOCK_SIZE):
+    for start_offset in tl.range(0, hidden_size, BLOCK_SIZE):  # 分块处理隐藏单元
         offset = start_offset + vec
-        mask = offset < hidden_size
+        mask = offset < hidden_size  # 边界检查
 
-        sum_vec = tl.zeros([BLOCK_SIZE], dtype=InDtype)
-        for idx in range(topk):
+        sum_vec = tl.zeros([BLOCK_SIZE], dtype=InDtype)  # 累加所有 expert 的输出
+        for idx in range(topk):  # 遍历该 token 分配到的每个 expert
             expert_id = tl.load(topk_ids_ptr + idx)
-            if expert_id >= start_expert_id and expert_id <= end_expert_id:
+            if expert_id >= start_expert_id and expert_id <= end_expert_id:  # 只处理本分片 expert
                 computed = True
                 dst_idx_int32 = tl.load(src2dst_ptr + idx)
                 dst_idx = dst_idx_int32.to(tl.int64)
-                dst_idx = dst_idx - dst_start
-                weigh_scale = tl.load(topk_weights_ptr + idx).to(InDtype)
-                load_ptr = down_output_ptr + dst_idx * hidden_size
-                in_data = tl.load(load_ptr + offset, mask=mask)
-                sum_vec += in_data * weigh_scale
-        tl.store(store_ptr + offset, sum_vec, mask=mask)
+                dst_idx = dst_idx - dst_start  # 转为本分片内索引
+                weigh_scale = tl.load(topk_weights_ptr + idx).to(InDtype)  # 门控权重
+                load_ptr = down_output_ptr + dst_idx * hidden_size  # 该 expert 输出起始位置
+                in_data = tl.load(load_ptr + offset, mask=mask)  # 读入数据
+                sum_vec += in_data * weigh_scale  # 加权累加
+        tl.store(store_ptr + offset, sum_vec, mask=mask)  # 写入最终输出
 
     if computed == False:
+        # 如果该 token 没有分配到任何 expert，输出全 0
         for start_offset in tl.range(0, hidden_size, BLOCK_SIZE):
             offset = start_offset + vec
             mask = offset < hidden_size

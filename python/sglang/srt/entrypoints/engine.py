@@ -731,7 +731,8 @@ def _launch_subprocesses(
                     + ((pp_rank % pp_size_per_node) * tp_size_per_node)
                     + (tp_rank % tp_size_per_node) * server_args.gpu_id_step
                 )
-                print(f"🔧 [ENGINE] Launching scheduler process: pp_rank={pp_rank}, tp_rank={tp_rank}, gpu_id={gpu_id}")
+                if tp_rank == 0:
+                    print(f"🔧 [ENGINE] Launching scheduler process: pp_rank={pp_rank}, tp_rank={tp_rank}, gpu_id={gpu_id}")
                 proc = mp.Process(
                     target=run_scheduler_process,
                     args=(
