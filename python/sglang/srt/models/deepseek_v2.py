@@ -422,7 +422,7 @@ class DeepseekV2MoE(nn.Module):
     ) -> torch.Tensor:
         log_info_on_rank0(logger, f"[DeepseekV2MoE] self.alt_stream={self.alt_stream}")
         log_info_on_rank0(logger, f"[DeepseekV2MoE] self.num_fused_shared_experts={self.num_fused_shared_experts}")
-        log_info_on_rank0(logger, f"[DeepseekV2MoE] hidden_states.shape={hidden_states.shape}, dtype={hidden_states.dtype}")
+        log_info_on_rank0(logger, f"[DeepseekV2MoE] hidden_states.shape={hidden_states.shape}, dtype={hidden_states.dtype}, hidden_states[0,:]={hidden_states[0,:]}")
         log_info_on_rank0(logger, f"[DeepseekV2MoE] can_fuse_mlp_allreduce={can_fuse_mlp_allreduce}")
         if not self._enable_deepep_moe:
             DUAL_STREAM_TOKEN_THRESHOLD = 1024

@@ -569,9 +569,9 @@ class EPMoE(torch.nn.Module):
                 layer_id=self.layer_id,
             ),
         )
-        logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, hidden_states: shape={hidden_states.shape}, dtype={hidden_states.dtype}, hidden_states[0,:10]={hidden_states[0,:10].detach().cpu().float().numpy()}")
-        logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, topk_weights: shape={topk_weights.shape}, dtype={topk_weights.dtype}, topk_weights={topk_weights.detach().cpu().float().numpy()}")
-        logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, topk_ids: shape={topk_ids.shape}, dtype={topk_ids.dtype}, topk_ids={topk_ids.detach().cpu().numpy()}")
+        logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, hidden_states: shape={hidden_states.shape}, dtype={hidden_states.dtype}")
+        logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, topk_weights: shape={topk_weights.shape}, dtype={topk_weights.dtype}")
+        logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, topk_ids: shape={topk_ids.shape}, dtype={topk_ids.dtype}")
         logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, expert_map[topk_ids]: shape={self.expert_map[topk_ids].shape}, dtype={self.expert_map[topk_ids].dtype}")
         
         if self.use_w4afp8:
@@ -584,7 +584,7 @@ class EPMoE(torch.nn.Module):
                     self.num_experts,
                 )
                 
-            logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, local_topk_ids: shape={local_topk_ids.shape}, dtype={local_topk_ids.dtype}, local_topk_ids={local_topk_ids.detach().cpu().numpy()}")
+            logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, local_topk_ids: shape={local_topk_ids.shape}, dtype={local_topk_ids.dtype}")
             logger.info(f"[EPMoE.forward_normal] self.layer_id={self.layer_id}, self.start_expert_id={self.start_expert_id}, self.end_expert_id={self.end_expert_id}")
             # log_info_on_rank0(logger, f"self.num_experts={self.num_experts}")
             # log_info_on_rank0(logger, f"self.w13_weight: shape={self.w13_weight.shape}, dtype={self.w13_weight.dtype}")
