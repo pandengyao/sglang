@@ -381,9 +381,18 @@ class DeepEPMoE(EPMoE):
         topk_weights: torch.Tensor,
         forward_batch: ForwardBatch,
     ):
+        if self.layer_id == 3:
+            if hidden_states.shape[0] > 0:
+                logger.info(f"[DeepEPMoE.forward] hidden_states.shape={hidden_states.shape}, dtype={hidden_states.dtype}, hidden_states[0,:]={hidden_states[0,:]}")
+            else:
+                logger.info(f"[DeepEPMoE.forward] hidden_states.shape={hidden_states.shape}, dtype={hidden_states.dtype}")
+            logger.info(f"[DeepEPMoE.forward] topk_idx.shape={topk_idx.shape}, dtype={topk_idx.dtype}, topk_idx={topk_idx}")
+            logger.info(f"[DeepEPMoE.forward] topk_weights.shape={topk_weights.shape}, dtype={topk_weights.dtype}, topk_weights={topk_weights}")
         dispatch_output = self.dispatch(
             hidden_states, topk_idx, topk_weights, forward_batch
         )
+        if self.layer_id == 3:
+            logger.info(f"[DeepEPMoE.forward] deepep_mode={dispatch_output.format}")
         hidden_states = self.moe_impl(dispatch_output)
         hidden_states = self.combine(
             hidden_states,
@@ -688,6 +697,15 @@ class DeepEPMoE(EPMoE):
             dispatch_output.topk_idx,
             dispatch_output.topk_weights,
         )
+        if self.layer_id == 3:
+            if hidden_states.shape[0] > 0:
+                logger.info(f"[DeepEPMoE.forward_cutlass_w4a8] hidden_states.shape={hidden_states.shape}, dtype={hidden_states.dtype}, hidden_states[0,:]={hidden_states[0,:]}")
+            else:
+                logger.info(f"[DeepEPMoE.forward_cutlass_w4a8] hidden_states.shape={hidden_states.shape}, dtype={hidden_states.dtype}")
+            logger.info(f"[DeepEPMoE.forward_cutlass_w4a8] topk_idx.shape={topk_idx.shape}, dtype={topk_idx.dtype}, topk_idx={topk_idx}")
+            logger.info(f"[DeepEPMoE.forward_cutlass_w4a8] topk_weights.shape={topk_weights.shape}, dtype={topk_weights.dtype}, topk_weights={topk_weights}")
+            logger.info(f"[DeepEPMoE.forward_cutlass_w4a8] self.start_expert_id={self.start_expert_id}, self.end_expert_id={self.end_expert_id}, self.num_experts={self.num_experts}")
+            
         if hidden_states.shape[0] > 0:
             output = cutlass_w4a8_moe(
                 self.start_expert_id,
