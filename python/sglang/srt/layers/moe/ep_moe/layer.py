@@ -322,6 +322,8 @@ class DeepEPMoE(EPMoE):
             routed_scaling_factor=routed_scaling_factor,
         )
         self.deepep_mode = deepep_mode
+        if self.layer_id == 3:
+            logger.info(f"[DeepEPMoE.init] self.deepep_mode: {self.deepep_mode}")
 
         # TODO: move to the beginning of the file
         from sglang.srt.distributed.parallel_state import get_tp_group
@@ -362,7 +364,7 @@ class DeepEPMoE(EPMoE):
                 self.w13_weight,
                 (
                     self.w13_weight_scale_inv
-                    if self.use_block_quant
+                    if self.use_block_quant or get_bool_env_var("SGLANG_USE_W4A8")
                     else self.w13_weight_scale
                 ),
             )
@@ -370,7 +372,7 @@ class DeepEPMoE(EPMoE):
                 self.w2_weight,
                 (
                     self.w2_weight_scale_inv
-                    if self.use_block_quant
+                    if self.use_block_quant or get_bool_env_var("SGLANG_USE_W4A8")
                     else self.w2_weight_scale
                 ),
             )
@@ -382,9 +384,18 @@ class DeepEPMoE(EPMoE):
         topk_weights: torch.Tensor,
         forward_batch: ForwardBatch,
     ):
+        if self.layer_id == 3:
+            if hidden_states.shape[0] > 0:
+                logger.info(f"[DeepEPMoE.forward] hidden_states.shape={hidden_states.shape}, dtype={hidden_states.dtype}, hidden_states[0,:]={hidden_states[0,:]}")
+            else:
+                logger.info(f"[DeepEPMoE.forward] hidden_states.shape={hidden_states.shape}, dtype={hidden_states.dtype}")
+            logger.info(f"[DeepEPMoE.forward] topk_idx.shape={topk_idx.shape}, dtype={topk_idx.dtype}, topk_idx={topk_idx}")
+            logger.info(f"[DeepEPMoE.forward] topk_weights.shape={topk_weights.shape}, dtype={topk_weights.dtype}, topk_weights={topk_weights}")
         dispatch_output = self.dispatch(
             hidden_states, topk_idx, topk_weights, forward_batch
         )
+        if self.layer_id == 3:
+            logger.info(f"[DeepEPMoE.forward] deepep_mode={dispatch_output.format}")
         hidden_states = self.moe_impl(dispatch_output)
         hidden_states = self.combine(
             hidden_states,
@@ -432,6 +443,23 @@ class DeepEPMoE(EPMoE):
         from sglang.srt.layers.moe.cutlass_w4a8_moe import cutlass_w4a8_moe
 
         hidden_states, _, _, masked_m, _ = dispatch_output
+        
+        if self.layer_id == 3:
+            if hidden_states.shape[0] > 0:
+                logger.info(f"[EPMoE.forward_cutlass_w4a8] hidden_states.shape={hidden_states.shape}, dtype={hidden_states.dtype}, hidden_states[0,:]={hidden_states[0,:]}")
+            else:
+                logger.info(f"[EPMoE.forward_cutlass_w4a8] hidden_states.shape={hidden_states.shape}, dtype={hidden_states.dtype}")
+            logger.info(f"[EPMoE.forward_cutlass_w4a8] masked_m.shape={masked_m.shape}, dtype={masked_m.dtype}, masked_m={masked_m}")
+
+            logger.info(f"[EPMoE.forward_cutlass_w4a8] start_expert_id={self.start_expert_id}, end_expert_id={self.end_expert_id}, num_experts={self.num_experts}")
+            logger.info(f"[EPMoE.forward_cutlass_w4a8] w13_weight.shape={self.w13_weight.shape}, dtype={self.w13_weight.dtype}")
+            logger.info(f"[EPMoE.forward_cutlass_w4a8] w2_weight.shape={self.w2_weight.shape}, dtype={self.w2_weight.dtype}")
+            logger.info(f"[EPMoE.forward_cutlass_w4a8] w13_weight_scale_inv.shape={self.w13_weight_scale_inv.shape}, dtype={self.w13_weight_scale_inv.dtype}")
+            logger.info(f"[EPMoE.forward_cutlass_w4a8] w2_weight_scale_inv.shape={self.w2_weight_scale_inv.shape}, dtype={self.w2_weight_scale_inv.dtype}")
+
+        # logger.info(f"[EPMoE.forward_cutlass_w4a8] self.layer_id={self.layer_id}, w13_input_scale.shape={self.w13_input_scale.shape}, dtype={self.w13_input_scale.dtype}, w13_input_scale={self.w13_input_scale}")
+        # logger.info(f"[EPMoE.forward_cutlass_w4a8] self.layer_id={self.layer_id}, w2_input_scale.shape={self.w2_input_scale.shape}, dtype={self.w2_input_scale.dtype}, w2_input_scale={self.w2_input_scale}")
+
         output = cutlass_w4a8_moe(
             self.start_expert_id,
             self.end_expert_id,
@@ -459,6 +487,12 @@ class DeepEPMoE(EPMoE):
             self.w2_input_scale,
             deepep_mode=dispatch_output.format,
         )
+        
+        if self.layer_id == 3:
+            if output.shape[0] > 0:
+                logger.info(f"[EPMoE.forward_cutlass_w4a8] output.shape={output.shape}, dtype={output.dtype}, output[0,:]={output[0,:]}")
+            else:
+                logger.info(f"[EPMoE.forward_cutlass_w4a8] output.shape={output.shape}, dtype={output.dtype}")
 
         return output
 

@@ -1,0 +1,3 @@
+# curl -s http://127.0.0.1:8005/v1/chat/completions -H "Content-Type: application/json" -d '{"model": "/ssd2/models/DeepSeek-R1-W4AFP8", "messages": [{"role": "user", "content": "What is the capital of France?"}]}'
+
+curl -s http://127.0.0.1:8005/v1/chat/completions -H "Content-Type: application/json" -d '{"model": "/ssd2/models/DeepSeek-R1-W4AFP8", "messages": [{"role": "user", "content": "What is the capital of France?"}], "max_tokens": 1}'

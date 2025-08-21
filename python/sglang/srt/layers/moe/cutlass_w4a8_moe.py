@@ -163,9 +163,9 @@ def cutlass_w4a8_moe(
 
         gateup_input = torch.empty(a.shape, dtype=torch.float8_e4m3fn, device=device)
         sgl_per_tensor_quant_fp8(a, gateup_input, a1_scale.float(), True)
-        c1 = torch.empty((num_experts, m, n * 2), device=device, dtype=torch.half)
-        c2 = torch.empty((num_experts, m, k), device=device, dtype=torch.half)
-        intermediate = torch.empty((num_experts, m, n), device=device, dtype=torch.half)
+        c1 = torch.empty((num_experts, m, n * 2), device=device, dtype=torch.bfloat16)
+        c2 = torch.empty((num_experts, m, k), device=device, dtype=torch.bfloat16)
+        intermediate = torch.empty((num_experts, m, n), device=device, dtype=torch.bfloat16)
 
     # NOTE: a_map and c_map are not used in the get_cutlass_w4a8_moe_mm_data kernel,
     # they are kept to allow for a quick switch of the permutation logic
@@ -185,9 +185,9 @@ def cutlass_w4a8_moe(
             k,
         )
 
-        c1 = torch.empty((m * topk, n * 2), device=device, dtype=torch.half)
-        c2 = torch.zeros((m * topk, k), device=device, dtype=torch.half)
-        intermediate = torch.empty((m * topk, n), device=device, dtype=torch.half)
+        c1 = torch.empty((m * topk, n * 2), device=device, dtype=torch.bfloat16)
+        c2 = torch.zeros((m * topk, k), device=device, dtype=torch.bfloat16)
+        intermediate = torch.empty((m * topk, n), device=device, dtype=torch.bfloat16)
 
     cutlass_w4a8_moe_mm(
         c1,
