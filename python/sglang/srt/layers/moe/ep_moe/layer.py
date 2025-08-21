@@ -446,7 +446,7 @@ class DeepEPMoE(EPMoE):
         
         if self.layer_id == 3:
             if hidden_states.shape[0] > 0:
-                logger.info(f"[EPMoE.forward_cutlass_w4a8] hidden_states.shape={hidden_states.shape}, dtype={hidden_states.dtype}, hidden_states[0,:]={hidden_states[0,:]}")
+                logger.info(f"[EPMoE.forward_cutlass_w4a8] hidden_states.shape={hidden_states.shape}, dtype={hidden_states.dtype}, hidden_states[:,0,:]={hidden_states[:,0,:]}")
             else:
                 logger.info(f"[EPMoE.forward_cutlass_w4a8] hidden_states.shape={hidden_states.shape}, dtype={hidden_states.dtype}")
             logger.info(f"[EPMoE.forward_cutlass_w4a8] masked_m.shape={masked_m.shape}, dtype={masked_m.dtype}, masked_m={masked_m}")
